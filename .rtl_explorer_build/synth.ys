@@ -1,0 +1,5 @@
+read_verilog -sv -I"C:/Users/Davi/Desktop/RTL_EXP/sample" "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv"
+read_verilog -sv "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv"
+hierarchy -check -top rtl_explorer_top
+proc; flatten; opt; memory; opt
+write_json "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/netlist.json"

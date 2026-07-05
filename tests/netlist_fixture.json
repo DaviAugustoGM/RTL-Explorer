@@ -1,0 +1,50 @@
+{
+  "modules": {
+    "rtl_explorer_top": {
+      "ports": {
+        "clk": {"direction": "input", "bits": [1]},
+        "a": {"direction": "input", "bits": [2]},
+        "b": {"direction": "input", "bits": [3]},
+        "arst": {"direction": "input", "bits": [6]},
+        "srst": {"direction": "input", "bits": [8]},
+        "en": {"direction": "input", "bits": [9]},
+        "y": {"direction": "output", "bits": [4]},
+        "q": {"direction": "output", "bits": [5]},
+        "aq": {"direction": "output", "bits": [7]},
+        "sq": {"direction": "output", "bits": [10, 11, 12, 13, 14, 15, 16, 17]}
+      },
+      "cells": {
+        "and_cell": {
+          "type": "$and",
+          "parameters": {},
+          "connections": {"A": [2], "B": [3], "Y": [4]}
+        },
+        "register": {
+          "type": "$dff",
+          "parameters": {"CLK_POLARITY": "1"},
+          "connections": {"CLK": [1], "D": [4], "Q": [5]}
+        },
+        "async_register": {
+          "type": "$adff",
+          "parameters": {"CLK_POLARITY": "1", "ARST_POLARITY": "1", "ARST_VALUE": "1"},
+          "connections": {"CLK": [1], "ARST": [6], "D": [4], "Q": [7]}
+        },
+        "sync_reset_register": {
+          "type": "$sdffe",
+          "parameters": {
+            "CLK_POLARITY": "1", "EN_POLARITY": "1",
+            "SRST_POLARITY": "1", "SRST_VALUE": "00000101"
+          },
+          "connections": {
+            "CLK": [1], "EN": [9], "SRST": [8],
+            "D": [4, "0", "0", "0", "0", "0", "0", "0"],
+            "Q": [10, 11, 12, 13, 14, 15, 16, 17]
+          }
+        }
+      },
+      "netnames": {
+        "u_demo.current_state": {"bits": [5]}
+      }
+    }
+  }
+}

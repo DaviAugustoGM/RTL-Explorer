@@ -1,0 +1,269 @@
+{
+  "creator": "Yosys 0.66 (git sha1 86f2ddebc, ccache clang++  -O3 -fwasm-exceptions -mllvm) [yowasp/yosys at release-0.66]",
+  "modules": {
+    "rtl_explorer_top": {
+      "attributes": {
+        "top": "00000000000000000000000000000001",
+        "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:1.1-32.10"
+      },
+      "ports": {
+        "u_clock_generator_3__clk": {
+          "direction": "input",
+          "bits": [ 2 ]
+        },
+        "u_input_signal_2__out": {
+          "direction": "input",
+          "bits": [ 3 ]
+        },
+        "u_input_signal_1__out": {
+          "direction": "input",
+          "bits": [ 4 ]
+        },
+        "u_input_signal_5__out": {
+          "direction": "input",
+          "bits": [ 5, 6, 7, 8, 9, 10, 11, 12 ]
+        },
+        "u_producer__data": {
+          "direction": "output",
+          "bits": [ 13, 14, 15, 16, 17, 18, 19, 20 ]
+        },
+        "u_producer__valid": {
+          "direction": "output",
+          "bits": [ 21 ]
+        }
+      },
+      "cells": {
+        "$auto$ff.cc:337:slice$17": {
+          "hide_name": 1,
+          "type": "$adffe",
+          "parameters": {
+            "ARST_POLARITY": "00000000000000000000000000000000",
+            "ARST_VALUE": "00000000",
+            "CLK_POLARITY": "00000000000000000000000000000001",
+            "EN_POLARITY": "00000000000000000000000000000001",
+            "WIDTH": "00000000000000000000000000001000"
+          },
+          "attributes": {
+            "always_ff": "00000000000000000000000000000001",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:8.5-18.8"
+          },
+          "port_directions": {
+            "ARST": "input",
+            "CLK": "input",
+            "D": "input",
+            "EN": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "ARST": [ 3 ],
+            "CLK": [ 2 ],
+            "D": [ 22, 23, 24, 25, 26, 27, 28, 29 ],
+            "EN": [ 4 ],
+            "Q": [ 13, 14, 15, 16, 17, 18, 19, 20 ]
+          }
+        },
+        "$flatten\\u_producer.$add$C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:15$3": {
+          "hide_name": 1,
+          "type": "$add",
+          "parameters": {
+            "A_SIGNED": "00000000000000000000000000000000",
+            "A_WIDTH": "00000000000000000000000000001000",
+            "B_SIGNED": "00000000000000000000000000000000",
+            "B_WIDTH": "00000000000000000000000000001000",
+            "Y_WIDTH": "00000000000000000000000000001000"
+          },
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:15.25-15.37"
+          },
+          "port_directions": {
+            "A": "input",
+            "B": "input",
+            "Y": "output"
+          },
+          "connections": {
+            "A": [ 13, 14, 15, 16, 17, 18, 19, 20 ],
+            "B": [ "1", "0", "0", "0", "0", "0", "0", "0" ],
+            "Y": [ 22, 23, 24, 25, 26, 27, 28, 29 ]
+          }
+        },
+        "$flatten\\u_producer.$procdff$15": {
+          "hide_name": 1,
+          "type": "$adff",
+          "parameters": {
+            "ARST_POLARITY": "00000000000000000000000000000000",
+            "ARST_VALUE": "0",
+            "CLK_POLARITY": "1",
+            "WIDTH": "00000000000000000000000000000001"
+          },
+          "attributes": {
+            "always_ff": "00000000000000000000000000000001",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:8.5-18.8"
+          },
+          "port_directions": {
+            "ARST": "input",
+            "CLK": "input",
+            "D": "input",
+            "Q": "output"
+          },
+          "connections": {
+            "ARST": [ 3 ],
+            "CLK": [ 2 ],
+            "D": [ 4 ],
+            "Q": [ 21 ]
+          }
+        },
+        "u_producer": {
+          "hide_name": 0,
+          "type": "$scopeinfo",
+          "parameters": {
+            "TYPE": "module"
+          },
+          "attributes": {
+            "cell_module_not_derived": "00000000000000000000000000000001",
+            "cell_src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:24.14-30.6",
+            "module": "producer",
+            "module_src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:1.1-19.10"
+          },
+          "port_directions": {
+          },
+          "connections": {
+          }
+        }
+      },
+      "netnames": {
+        "$flatten\\u_producer.$add$C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:15$3_Y": {
+          "hide_name": 1,
+          "bits": [ 22, 23, 24, 25, 26, 27, 28, 29 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:15.25-15.37"
+          }
+        },
+        "net_1": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:10.11-10.16"
+          }
+        },
+        "net_2": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:11.11-11.16"
+          }
+        },
+        "net_3": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:12.11-12.16"
+          }
+        },
+        "net_4": {
+          "hide_name": 0,
+          "bits": [ 13, 14, 15, 16, 17, 18, 19, 20 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:13.17-13.22"
+          }
+        },
+        "net_5": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:14.11-14.16"
+          }
+        },
+        "net_6": {
+          "hide_name": 0,
+          "bits": [ 5, 6, 7, 8, 9, 10, 11, 12 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:15.17-15.22",
+            "unused_bits": "0 1 2 3 4 5 6 7"
+          }
+        },
+        "u_clock_generator_3__clk": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:2.17-2.41"
+          }
+        },
+        "u_input_signal_1__out": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:4.17-4.38"
+          }
+        },
+        "u_input_signal_2__out": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:3.17-3.38"
+          }
+        },
+        "u_input_signal_5__out": {
+          "hide_name": 0,
+          "bits": [ 5, 6, 7, 8, 9, 10, 11, 12 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:5.23-5.44"
+          }
+        },
+        "u_producer.clk": {
+          "hide_name": 0,
+          "bits": [ 2 ],
+          "attributes": {
+            "hdlname": "u_producer clk",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:2.24-2.27"
+          }
+        },
+        "u_producer.data": {
+          "hide_name": 0,
+          "bits": [ 13, 14, 15, 16, 17, 18, 19, 20 ],
+          "attributes": {
+            "hdlname": "u_producer data",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:5.24-5.28"
+          }
+        },
+        "u_producer.enable": {
+          "hide_name": 0,
+          "bits": [ 4 ],
+          "attributes": {
+            "hdlname": "u_producer enable",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:4.24-4.30"
+          }
+        },
+        "u_producer.rst_n": {
+          "hide_name": 0,
+          "bits": [ 3 ],
+          "attributes": {
+            "hdlname": "u_producer rst_n",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:3.24-3.29"
+          }
+        },
+        "u_producer.valid": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {
+            "hdlname": "u_producer valid",
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/sources/001_producer.sv:6.24-6.29"
+          }
+        },
+        "u_producer__data": {
+          "hide_name": 0,
+          "bits": [ 13, 14, 15, 16, 17, 18, 19, 20 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:6.24-6.40"
+          }
+        },
+        "u_producer__valid": {
+          "hide_name": 0,
+          "bits": [ 21 ],
+          "attributes": {
+            "src": "C:/Users/Davi/Desktop/RTL_EXP/.rtl_explorer_build/rtl_explorer_top.sv:7.18-7.35"
+          }
+        }
+      }
+    }
+  }
+}
