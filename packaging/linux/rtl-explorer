@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+SCRIPT_PATH=$(readlink -f -- "$0")
+APP_DIR=$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd)
+export RTL_EXPLORER_TOOLS="$APP_DIR/tools"
+if [ -d "$APP_DIR/runtime/bin" ]; then
+    PATH="$APP_DIR/runtime/bin:$PATH"
+    export PATH
+    CONDA_PREFIX="$APP_DIR/runtime"
+    LD_LIBRARY_PATH="$APP_DIR/runtime/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export CONDA_PREFIX LD_LIBRARY_PATH
+fi
+if [ -x "$APP_DIR/runtime/bin/wish" ]; then
+    WISH="$APP_DIR/runtime/bin/wish"
+elif [ -x "$APP_DIR/runtime/bin/wish8.6" ]; then
+    WISH="$APP_DIR/runtime/bin/wish8.6"
+elif command -v wish >/dev/null 2>&1; then
+    WISH=$(command -v wish)
+else
+    echo "Tcl/Tk was not found. Run make install again." >&2
+    exit 1
+fi
+exec "$WISH" "$APP_DIR/src/main.tcl" "$@"

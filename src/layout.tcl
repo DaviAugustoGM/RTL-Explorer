@@ -44,10 +44,10 @@ proc ::svvs::layout::createTopbar {parent} {
     foreach item {
         {"File" {::svvs::layout::showFileMenu %W}}
         {"Auto Connect" {::svvs::canvas_connections::autoConnect}}
-        {"Reset" {::svvs::simulator_view::stop}}
-        {"Step" {::svvs::simulator_view::step}}
         {"Run" {::svvs::simulator_view::run}}
+        {"Build and Run" {::svvs::simulator_view::buildAndRun}}
         {"Pause" {::svvs::simulator_view::pause}}
+        {"Stop" {::svvs::simulator_view::stop}}
         {"Names" {::svvs::canvas_blocks::togglePortNames}}
         {"Simple Wires" {::svvs::canvas_connections::toggleSimplified}}
     } {
@@ -146,6 +146,7 @@ proc ::svvs::layout::openFolder {} {
         return
     }
 
+    ::svvs::simulator_view::clearBuildCache
     ::svvs::project_tree::loadProjectFiles $files [file tail $dir]
     ::svvs::console::log "Pasta carregada: $dir"
     ::svvs::console::log "Arquivos .sv encontrados: [llength $files]" ok
@@ -164,6 +165,7 @@ proc ::svvs::layout::openFiles {} {
         return
     }
 
+    ::svvs::simulator_view::clearBuildCache
     ::svvs::project_tree::loadProjectFiles $files "selected_files"
     ::svvs::console::log "Arquivos carregados: [llength $files]" ok
 }
@@ -202,6 +204,7 @@ proc ::svvs::layout::openProjectFrom {path} {
         return 0
     }
 
+    ::svvs::simulator_view::clearBuildCache
     ::svvs::canvas_blocks::clearCanvas
     if {[dict exists $data project]} {
         ::svvs::project_tree::importProjectData [dict get $data project]
@@ -218,10 +221,9 @@ proc ::svvs::layout::openProjectFrom {path} {
     if {[dict exists $data connections]} {
         ::svvs::canvas_connections::importConnectionData [dict get $data connections]
     }
-    if {[dict exists $data demonstrations]} {
-        ::svvs::demo_scenarios::importData [dict get $data demonstrations]
-    } else {
-        ::svvs::demo_scenarios::reset
+    if {[dict exists $data simulationEngine] &&
+            [dict get $data simulationEngine] in {Automatic CXXRTL Icarus Python}} {
+        set ::svvs::simulation_backends::selectedEngine [dict get $data simulationEngine]
     }
     ::svvs::canvas_connections::refreshAll
     ::svvs::properties_panel::showWelcome
@@ -269,7 +271,7 @@ proc ::svvs::layout::saveProjectTo {path} {
         fsmView [::svvs::fsm_viewer::exportData] \
         diagram [::svvs::canvas_blocks::exportDiagramData] \
         connections [::svvs::canvas_connections::exportConnectionData] \
-        demonstrations [::svvs::demo_scenarios::exportData]]
+        simulationEngine $::svvs::simulation_backends::selectedEngine]
 
     if {[catch {
         set fh [open $path w]
@@ -287,8 +289,7 @@ proc ::svvs::layout::saveProjectTo {path} {
 }
 
 proc ::svvs::layout::closeProject {} {
-    ::svvs::simulator_view::closeProcess
-    ::svvs::demo_scenarios::reset
+    ::svvs::simulator_view::clearBuildCache
     ::svvs::project_tree::closeProject
     ::svvs::canvas_blocks::clearCanvas
     ::svvs::properties_panel::showWelcome

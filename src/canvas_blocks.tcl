@@ -26,15 +26,30 @@ proc ::svvs::canvas_blocks::create {parent} {
         -xscrollincrement 1 \
         -yscrollincrement 1]
 
-    bind $canvas <ButtonPress-1> {::svvs::canvas_blocks::onPress %x %y}
+    bind $canvas <ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y}
     bind $canvas <B1-Motion> {::svvs::canvas_blocks::onDrag %x %y}
     bind $canvas <ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y}
     bind $canvas <ButtonPress-3> {::svvs::canvas_connections::showSimplifiedSideMenu %X %Y %x %y}
     bind $canvas <Double-1> {::svvs::simulation_components::onDoubleClick %x %y}
     bind $canvas <MouseWheel> {::svvs::canvas_blocks::onWheel %D %x %y}
+    bind $canvas <Button-4> {::svvs::canvas_blocks::onWheel 1 %x %y}
+    bind $canvas <Button-5> {::svvs::canvas_blocks::onWheel -1 %x %y}
     bind $canvas <ButtonPress-2> {::svvs::canvas_blocks::panStart %x %y}
     bind $canvas <B2-Motion> {::svvs::canvas_blocks::panMove %x %y}
     bind $canvas <ButtonRelease-2> {::svvs::canvas_blocks::panEnd}
+    bind $canvas <Shift-ButtonPress-1> {focus %W; ::svvs::canvas_blocks::panStart %x %y; break}
+    bind $canvas <Shift-B1-Motion> {::svvs::canvas_blocks::panMove %x %y; break}
+    bind $canvas <Shift-ButtonRelease-1> {::svvs::canvas_blocks::panEnd; break}
+    bind $canvas <Control-plus> {::svvs::canvas_blocks::keyboardZoom 1; break}
+    bind $canvas <Control-equal> {::svvs::canvas_blocks::keyboardZoom 1; break}
+    bind $canvas <Control-KP_Add> {::svvs::canvas_blocks::keyboardZoom 1; break}
+    bind $canvas <Control-minus> {::svvs::canvas_blocks::keyboardZoom -1; break}
+    bind $canvas <Control-KP_Subtract> {::svvs::canvas_blocks::keyboardZoom -1; break}
+    bind $canvas <Control-Key-0> {::svvs::canvas_blocks::resetView; break}
+    bind $canvas <Left> {::svvs::canvas_blocks::keyboardPan -40 0; break}
+    bind $canvas <Right> {::svvs::canvas_blocks::keyboardPan 40 0; break}
+    bind $canvas <Up> {::svvs::canvas_blocks::keyboardPan 0 -40; break}
+    bind $canvas <Down> {::svvs::canvas_blocks::keyboardPan 0 40; break}
 
     after idle ::svvs::canvas_blocks::centerViewport
 
@@ -563,6 +578,35 @@ proc ::svvs::canvas_blocks::onWheel {delta x y} {
     set zoom $nextZoom
     $canvas scale all $cx $cy $factor $factor
     ::svvs::canvas_connections::scaleRoutes $cx $cy $factor
+    ::svvs::canvas_blocks::updateTextForZoom
+    ::svvs::canvas_connections::refreshAll
+    if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
+}
+
+proc ::svvs::canvas_blocks::keyboardZoom {direction} {
+    variable canvas
+    if {$canvas eq "" || ![winfo exists $canvas]} { return }
+    ::svvs::canvas_blocks::onWheel $direction \
+        [expr {[winfo width $canvas] / 2}] [expr {[winfo height $canvas] / 2}]
+}
+
+proc ::svvs::canvas_blocks::keyboardPan {dx dy} {
+    variable canvas
+    if {$canvas eq "" || ![winfo exists $canvas]} { return }
+    if {$dx != 0} { $canvas xview scroll $dx units }
+    if {$dy != 0} { $canvas yview scroll $dy units }
+}
+
+proc ::svvs::canvas_blocks::resetView {} {
+    variable canvas
+    variable zoom
+    if {$canvas eq "" || ![winfo exists $canvas] || $zoom == 1.0} { return }
+    set cx [$canvas canvasx [expr {[winfo width $canvas] / 2.0}]]
+    set cy [$canvas canvasy [expr {[winfo height $canvas] / 2.0}]]
+    set factor [expr {1.0 / $zoom}]
+    $canvas scale all $cx $cy $factor $factor
+    ::svvs::canvas_connections::scaleRoutes $cx $cy $factor
+    set zoom 1.0
     ::svvs::canvas_blocks::updateTextForZoom
     ::svvs::canvas_connections::refreshAll
     if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }

@@ -3,6 +3,14 @@ namespace eval ::svvs::simulation_model {
     variable topModule rtl_explorer_top
 }
 
+if {![info exists ::APP_DIR]} {
+    set ::APP_DIR [file dirname [file normalize [info script]]]
+}
+if {![llength [info commands ::svvs::toolchain::yosys]]} {
+    source [file join $::APP_DIR toolchain.tcl]
+    ::svvs::toolchain::activate
+}
+
 proc ::svvs::simulation_model::safeName {value} {
     set name [regsub -all {[^A-Za-z0-9_$]} $value _]
     if {$name eq "" || [regexp {^[0-9]} $name]} {
@@ -252,30 +260,15 @@ proc ::svvs::simulation_model::writeTop {path model} {
 }
 
 proc ::svvs::simulation_model::yosysExecutable {} {
-    foreach candidate {yosys.exe yosys} {
-        set resolved [auto_execok $candidate]
-        if {$resolved ne ""} {
-            return $resolved
-        }
-    }
-    set bundled [file join [file dirname $::APP_DIR] .tools yowasp-env bin yowasp-yosys.exe]
-    if {[file exists $bundled]} {
-        return $bundled
-    }
-    return ""
+    return [::svvs::toolchain::yosys]
+}
+
+proc ::svvs::simulation_model::sv2vExecutable {} {
+    return [::svvs::toolchain::sv2v]
 }
 
 proc ::svvs::simulation_model::pythonExecutable {} {
-    foreach candidate [list \
-            [file join [file dirname $::APP_DIR] .tools yowasp-env bin python.exe] \
-            [auto_execok python.exe] \
-            [auto_execok python] \
-            {C:/Program Files/Inkscape/bin/python.exe}] {
-        if {$candidate ne "" && [file exists $candidate]} {
-            return $candidate
-        }
-    }
-    return ""
+    return [::svvs::toolchain::python]
 }
 
 proc ::svvs::simulation_model::yosysQuote {path} {
@@ -432,10 +425,11 @@ proc ::svvs::simulation_model::prepare {} {
         return [dict create ok 0 model $model message "Adicione pelo menos um bloco ao diagrama."]
     }
 
-    set buildDir [file join [file dirname $::APP_DIR] .rtl_explorer_build]
-    file mkdir $buildDir
+    set buildDir [::svvs::toolchain::buildDirectory]
     set topPath [file join $buildDir rtl_explorer_top.sv]
+    set convertedPath [file join $buildDir rtl_explorer_design.v]
     set jsonPath [file join $buildDir netlist.json]
+    set cxxrtlPath [file join $buildDir cxxrtl_model.cpp]
     set scriptPath [file join $buildDir synth.ys]
     ::svvs::simulation_model::writeTop $topPath $model
 
@@ -448,28 +442,45 @@ proc ::svvs::simulation_model::prepare {} {
         lappend includeDirs [file dirname $path]
     }
     set includeDirs [lsort -unique $includeDirs]
-    set includeArgs ""
+    set sv2v [::svvs::simulation_model::sv2vExecutable]
+    if {$sv2v eq ""} {
+        return [dict create ok 0 missingTool sv2v model $model top $topPath script $scriptPath \
+            message "sv2v nao foi encontrado. Instale o conversor ou adicione-o em .tools/sv2v."]
+    }
+    catch {file delete -force $convertedPath}
+    set sv2vCommand [list $sv2v]
     foreach dir $includeDirs {
-        append includeArgs " -I[::svvs::simulation_model::yosysQuote $dir]"
+        lappend sv2vCommand "--incdir=[file normalize $dir]"
     }
-    foreach path $files {
-        lappend lines "read_verilog -sv$includeArgs [::svvs::simulation_model::yosysQuote $path]"
+    lappend sv2vCommand "--write=[file normalize $convertedPath]"
+    foreach path $files { lappend sv2vCommand [file normalize $path] }
+    lappend sv2vCommand [file normalize $topPath]
+    if {[catch {exec {*}$sv2vCommand 2>@1} sv2vOutput]} {
+        return [dict create ok 0 model $model top $topPath converted $convertedPath script $scriptPath \
+            message "Falha no sv2v:\n$sv2vOutput"]
     }
-    lappend lines "read_verilog -sv [::svvs::simulation_model::yosysQuote $topPath]"
+    if {![file exists $convertedPath]} {
+        return [dict create ok 0 model $model top $topPath converted $convertedPath script $scriptPath \
+            message "O sv2v terminou sem gerar o arquivo Verilog convertido."]
+    }
+
+    lappend lines "read_verilog [::svvs::simulation_model::yosysQuote $convertedPath]"
     lappend lines "hierarchy -check -top $topModule"
     lappend lines "proc; flatten; opt; memory; opt"
     lappend lines "write_json [::svvs::simulation_model::yosysQuote $jsonPath]"
+    lappend lines "write_cxxrtl -O3 -g2 [::svvs::simulation_model::yosysQuote $cxxrtlPath]"
     set handle [open $scriptPath w]
     puts $handle [join $lines "\n"]
     close $handle
 
     set yosys [::svvs::simulation_model::yosysExecutable]
     if {$yosys eq ""} {
-        return [dict create ok 0 missingTool yosys model $model top $topPath script $scriptPath \
+        return [dict create ok 0 missingTool yosys model $model top $topPath converted $convertedPath script $scriptPath \
             message "Yosys nao foi encontrado. O projeto de sintese foi preparado, mas ainda nao pode ser executado."]
     }
     if {[catch {exec $yosys -q -s $scriptPath 2>@1} output]} {
-        return [dict create ok 0 model $model message "Falha na sintese:\n$output"]
+        return [dict create ok 0 model $model converted $convertedPath message "Falha na sintese Yosys:\n$output"]
     }
-    return [dict create ok 1 model $model json $jsonPath top $topPath script $scriptPath]
+    return [dict create ok 1 model $model json $jsonPath cxxrtl $cxxrtlPath \
+        top $topPath converted $convertedPath script $scriptPath]
 }

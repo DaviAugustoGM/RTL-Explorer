@@ -134,37 +134,6 @@ proc setupSignalComponentTest {} {
             [dict get $node height] == 104} { set savedProbeSize 1 }
     }
     if {!$savedProbeSize} { error "resized output probe dimensions were not exported" }
-    set ::svvs::demo_scenarios::scenarios [list [dict create name Regression steps [list \
-        [dict create duration 250 values [dict create test_signal 1]]]]]
-    set ::svvs::demo_scenarios::selected Regression
-    set savedDemos [::svvs::demo_scenarios::exportData]
-    ::svvs::demo_scenarios::reset
-    ::svvs::demo_scenarios::importData $savedDemos
-    if {[llength $::svvs::demo_scenarios::scenarios] != 1} {
-        error "demo scenarios were not restored"
-    }
-    if {[::svvs::demo_scenarios::stepTriggerLabel \
-        [dict create duration 250 values {}]] ne "250 ms"} {
-        error "legacy timed scenario label is invalid"
-    }
-    if {[::svvs::demo_scenarios::stepTriggerLabel \
-        [dict create trigger rising clock $::testClockName values {}]] ne \
-        "Rising: $::testClockName"} {
-        error "rising-edge scenario label is invalid"
-    }
-    set ::svvs::demo_scenarios::waitingClock $::testClockName
-    set ::svvs::demo_scenarios::waitingEdge rising
-    set ::svvs::demo_scenarios::remainingEdges 2
-    ::svvs::demo_scenarios::clockEdge $::testClockName falling
-    ::svvs::demo_scenarios::clockEdge another_clock rising
-    if {$::svvs::demo_scenarios::remainingEdges != 2} {
-        error "scenario accepted an unrelated clock edge"
-    }
-    ::svvs::demo_scenarios::clockEdge $::testClockName rising
-    if {$::svvs::demo_scenarios::remainingEdges != 1} {
-        error "scenario cycle counter did not consume a rising edge"
-    }
-    ::svvs::demo_scenarios::stop
     if {![::svvs::simulator_view::build]} { error "component simulation build failed" }
     ::svvs::simulator_view::run
     after 350 changeInputWithoutClockEdge

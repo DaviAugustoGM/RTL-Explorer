@@ -40,7 +40,9 @@ proc ::svvs::fsm_viewer::create {parent} {
     pack $canvas -fill both -expand 1
     bind $canvas <Configure> {after idle ::svvs::fsm_viewer::redraw}
     bind $canvas <MouseWheel> {::svvs::fsm_viewer::onWheel %D %x %y}
-    bind $canvas <ButtonPress-1> {::svvs::fsm_viewer::editPress %x %y}
+    bind $canvas <Button-4> {::svvs::fsm_viewer::onWheel 1 %x %y}
+    bind $canvas <Button-5> {::svvs::fsm_viewer::onWheel -1 %x %y}
+    bind $canvas <ButtonPress-1> {focus %W; ::svvs::fsm_viewer::editPress %x %y}
     bind $canvas <B1-Motion> {::svvs::fsm_viewer::editMove %x %y}
     bind $canvas <ButtonRelease-1> {::svvs::fsm_viewer::editRelease}
     bind $canvas <ButtonPress-3> {::svvs::fsm_viewer::showContextMenu %X %Y %x %y}
@@ -48,6 +50,19 @@ proc ::svvs::fsm_viewer::create {parent} {
     bind $canvas <B2-Motion> {::svvs::fsm_viewer::panMove %x %y}
     bind $canvas <ButtonRelease-2> {::svvs::fsm_viewer::panEnd}
     bind $canvas <Double-Button-2> {::svvs::fsm_viewer::resetView}
+    bind $canvas <Shift-ButtonPress-1> {focus %W; ::svvs::fsm_viewer::panStart %x %y; break}
+    bind $canvas <Shift-B1-Motion> {::svvs::fsm_viewer::panMove %x %y; break}
+    bind $canvas <Shift-ButtonRelease-1> {::svvs::fsm_viewer::panEnd; break}
+    bind $canvas <Control-plus> {::svvs::fsm_viewer::keyboardZoom 1; break}
+    bind $canvas <Control-equal> {::svvs::fsm_viewer::keyboardZoom 1; break}
+    bind $canvas <Control-KP_Add> {::svvs::fsm_viewer::keyboardZoom 1; break}
+    bind $canvas <Control-minus> {::svvs::fsm_viewer::keyboardZoom -1; break}
+    bind $canvas <Control-KP_Subtract> {::svvs::fsm_viewer::keyboardZoom -1; break}
+    bind $canvas <Control-Key-0> {::svvs::fsm_viewer::resetView; break}
+    bind $canvas <Left> {::svvs::fsm_viewer::keyboardPan -40 0; break}
+    bind $canvas <Right> {::svvs::fsm_viewer::keyboardPan 40 0; break}
+    bind $canvas <Up> {::svvs::fsm_viewer::keyboardPan 0 -40; break}
+    bind $canvas <Down> {::svvs::fsm_viewer::keyboardPan 0 40; break}
     ::svvs::fsm_viewer::showEmpty
     return $canvas
 }
@@ -381,6 +396,24 @@ proc ::svvs::fsm_viewer::onWheel {delta x y} {
     $canvas scale all $cx $cy $factor $factor
     ::svvs::fsm_viewer::updateVisualScale
     ::svvs::fsm_viewer::paintRuntimeState
+    $canvas configure -scrollregion [$canvas bbox all]
+}
+
+proc ::svvs::fsm_viewer::keyboardZoom {direction} {
+    variable canvas
+    if {$canvas eq "" || ![winfo exists $canvas]} { return }
+    ::svvs::fsm_viewer::onWheel $direction \
+        [expr {[winfo width $canvas] / 2}] [expr {[winfo height $canvas] / 2}]
+}
+
+proc ::svvs::fsm_viewer::keyboardPan {dx dy} {
+    variable canvas
+    variable panX
+    variable panY
+    if {$canvas eq "" || ![winfo exists $canvas]} { return }
+    $canvas move all [expr {-$dx}] [expr {-$dy}]
+    set panX [expr {$panX - $dx}]
+    set panY [expr {$panY - $dy}]
     $canvas configure -scrollregion [$canvas bbox all]
 }
 

@@ -1,5 +1,7 @@
 import importlib.util
+import json
 from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -44,6 +46,21 @@ class NetlistSimulatorTest(unittest.TestCase):
     def test_internal_signal_watch(self):
         self.simulator.add_watch("__fsm_1", "demo", "current_state")
         self.assertEqual(self.values()["__fsm_1"], "0")
+
+    def test_unknown_cells_are_rejected_instead_of_ignored(self):
+        design = {
+            "modules": {
+                "top": {
+                    "ports": {},
+                    "cells": {"bad": {"type": "$unsupported", "connections": {}}},
+                }
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "netlist.json"
+            path.write_text(json.dumps(design), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, r"\$unsupported"):
+                NETLIST_SIM.NetlistSimulator(path, "top")
 
 
 if __name__ == "__main__":

@@ -75,8 +75,9 @@ src/
   simulation_model.tcl    Converte o diagrama em um projeto sintetizavel
   simulation_components.tcl Blocos de entrada, probe e clock
   diagram_simulation.tcl  Valores e cores sobre o diagrama
-  demo_scenarios.tcl      Cenarios sincronizados de demonstracao
   simulator_view.tcl      Interface e controles da simulacao
+  simulation_backends.tcl Prepara CXXRTL, Icarus ou Python
+  icarus_backend.py       Adaptador ao vivo para Icarus Verilog
   pdf_export.tcl          Exportacao vetorial de diagramas para PDF
   netlist_sim.py          Executa o netlist JSON gerado pelo Yosys
   documentation.tcl       Aba inicial de documentacao
@@ -493,6 +494,30 @@ circulos dimensionados pelo maior nome e mantem espacamento fixo mesmo em telas 
 incondicionais nao mostram o rotulo redundante `default`. Zoom e arraste do campo
 de visao continuam disponiveis para diagramas extensos.
 
+Na aba **FSM**, arraste diretamente um circulo para reposicionar o estado. As
+transicoes conectadas sao recalculadas durante o movimento. Arraste o texto de
+uma condicao para coloca-lo em uma area mais legivel. Arrastar uma regiao vazia
+continua movendo o campo de visao.
+
+Os controles de navegacao sao equivalentes no Windows e no Linux:
+
+- roda do mouse aproxima ou afasta; no Linux tambem sao tratados os eventos
+  `Button-4` e `Button-5` usados pelo X11;
+- `Ctrl +`, `Ctrl -` e `Ctrl 0` controlam e restauram o zoom;
+- as setas deslocam o campo de visao;
+- botao do meio ou `Shift` + arraste com o botao esquerdo movem o campo.
+
+Esses atalhos funcionam tanto no diagrama de blocos quanto no visualizador FSM.
+
+O menu de contexto oferece ajustes por elemento:
+
+- no estado: **Circle color**, **Circle thickness**, restaurar posicao ou estilo;
+- na transicao ou condicao: **Transition color**, **Line thickness**,
+  **Condition text size**, restaurar a posicao do texto ou o estilo.
+
+Posicoes, cores, espessuras e tamanhos de fonte sao armazenados em `fsmView`
+dentro do projeto `.rtlex`. O exportador PDF usa o diagrama ja personalizado.
+
 ## Conceitos importantes para aprender
 
 Estude estes conceitos de Tcl/Tk:
@@ -527,25 +552,45 @@ O canvas transforma dados em desenhos.
 O `.rtlex` salva esses dados para restaurar depois.
 ## Simulacao ao vivo
 
-A simulacao foi separada em tres camadas para que a interface nao dependa dos
+A simulacao foi separada em camadas para que a interface nao dependa dos
 detalhes internos do Yosys:
 
 1. `simulation_model.tcl` le os blocos e conexoes do diagrama. Ele cria um
    modulo superior chamado `rtl_explorer_top`. Entradas sem uma saida dirigindo
    a rede viram entradas externas; cada saida de modulo vira tambem um sinal
    observavel.
-2. O Yosys le os arquivos `.sv` dos modulos presentes no diagrama junto com o modulo superior, executa
-   `proc`, `flatten`, `opt` e `memory`, e grava o resultado em
-   `.rtl_explorer_build/netlist.json`.
-3. `netlist_sim.py` mantem os valores dos bits e executa as celulas do JSON. A
-   GUI envia comandos simples para mudar entradas, avaliar a logica ou gerar uma
-   borda de clock. O processo devolve os novos valores sem interromper a
-   simulacao.
+2. O `sv2v` le em conjunto os arquivos `.sv` dos modulos presentes no diagrama,
+   seus pacotes e o modulo superior, convertendo SystemVerilog para
+   `.rtl_explorer_build/rtl_explorer_design.v`.
+3. O Yosys le somente esse Verilog convertido, executa `proc`, `flatten`, `opt`
+   e `memory`, e grava `netlist.json` e `cxxrtl_model.cpp`.
+4. `simulation_backends.tcl` prepara o motor selecionado. Todos usam o mesmo
+   protocolo, entao clocks e waveforms nao dependem do motor ativo.
 
-A aba **Simulation** e implementada em `simulator_view.tcl`. **Build** refaz a
-sintese, **Run** gera ciclos continuamente, **Pause** preserva o estado, **Stop**
-reinicia o estado e **Step** executa uma borda de clock. Entradas de um bit usam
-uma caixa de selecao; barramentos aceitam um valor decimal.
+A aba **Simulation** e implementada em `simulator_view.tcl`. **Build and Run**
+refaz toda a sintese e inicia a simulacao. **Run** reutiliza a ultima build sem
+chamar novamente sv2v, Yosys ou o compilador. **Pause** preserva o estado e muda
+para **Continue**; **Stop** encerra o processo mantendo a build disponivel para
+o proximo **Run**.
+
+A aba nao cria estimulos de teste nem lista portas externas automaticamente.
+Para testar um modulo, o usuario monta no diagrama outros blocos SystemVerilog
+sintetizaveis, conecta clocks, entradas e observadores, e sintetiza o conjunto
+como um unico circuito.
+
+O seletor **Engine** oferece:
+
+- **Automatic**: tenta CXXRTL, depois Icarus e finalmente Python, mostrando no
+  console o motivo de qualquer fallback;
+- **CXXRTL**: compila o modelo C++ do Yosys e e o caminho principal para RTL
+  sintetizavel;
+- **Icarus**: usa simulacao orientada a eventos e logica de quatro estados;
+  valores desconhecidos aparecem como `x` na interface;
+- **Python**: inicia rapidamente para circuitos simples e recusa celulas que nao
+  sabe executar, em vez de gerar silenciosamente um resultado incorreto.
+
+O JSON continua sendo gerado para diagnostico em todos os modos. A escolha do
+motor e armazenada no arquivo `.rtlex`.
 
 Depois do `Build`, `diagram_simulation.tcl` leva a simulacao para o proprio
 diagrama. Os valores aparecem ao lado das portas, entradas podem ser clicadas e
@@ -586,23 +631,6 @@ pulso do clock. Sinais de um bit aparecem como degraus. Barramentos aparecem
 como faixas com bordas inclinadas nas transicoes e um valor por intervalo,
 evitando textos sobrepostos.
 
-## Cenarios de demonstracao
-
-Na aba **Simulation**, a secao **Demo Scenarios** permite criar uma demonstracao
-com nome e capturar os valores atuais dos blocos de entrada como passos. Em
-**Hold until**, cada passo pode aguardar:
-
-- **Time**: uma duracao em milissegundos;
-- **Rising**: a proxima borda de subida do clock escolhido;
-- **Falling**: a proxima borda de descida;
-- **Cycles**: uma quantidade de bordas de subida.
-
-O valor das entradas e aplicado primeiro e permanece estavel ate o evento
-escolhido. Assim, para testar um registrador na subida do clock, escolha
-**Rising**, selecione o bloco de clock e use **Add step**. **Play** executa a
-sequencia com o mesmo clock exibido na waveform. O botao **Step** tambem conta
-como uma borda de subida. Os cenarios sao armazenados dentro do `.rtlex`.
-
 O menu **Click action** de `input_signal` tambem oferece slider e pulso
 momentaneo. O slider e adequado a barramentos; o pulso coloca a entrada em um e
 retorna para zero depois do intervalo configurado.
@@ -622,15 +650,19 @@ porta a que forem conectados. Esse nome aparece acima do quadrado e na waveform.
 Use **Rename...** no menu de contexto para trocar apenas o rotulo visual, sem
 alterar a instancia usada na sintese.
 
-O projeto procura primeiro por uma instalacao nativa de `yosys`. Se ela nao
-existir, usa o ambiente isolado `.tools/yowasp-env`, que contem a distribuicao
-WebAssembly do Yosys. O interpretador atual cobre operadores combinacionais,
-multiplexadores e os flip-flops mais comuns gerados por `always_ff`. Celulas de
-memoria especiais e primitivas de fabricante devem ser adicionadas ao motor
-quando esses casos entrarem no escopo do aplicativo.
+O projeto procura primeiro por instalacoes nativas de `sv2v` e `yosys`. Para
+`sv2v`, inclui tambem a distribuicao oficial Windows em
+`.tools/sv2v/sv2v-Windows`. Para Yosys, usa como alternativa o ambiente isolado
+`.tools/yowasp-env`, que contem sua distribuicao WebAssembly. CXXRTL usa um
+compilador C++ e Icarus usa `iverilog`/`vvp`; o aplicativo detecta instalacoes
+locais e a pasta `D:/RTL_EXP_tools` usada nesta maquina. O interpretador Python
+cobre operadores combinacionais, multiplexadores e os flip-flops mais comuns
+gerados por `always_ff`. Celulas fora dessa lista aparecem no diagnostico para
+que o usuario possa trocar para CXXRTL ou Icarus.
 
 Antes da sintese, o RTL Explorer segue as instancias para incluir os modulos dos
 quais o bloco depende. Pacotes SystemVerilog sao carregados uma unica vez. Para
-frontends que nao aceitam `import pacote::*` dentro do modulo, copias temporarias
-qualificam os simbolos como `pacote::simbolo`; os arquivos originais nao sao
-alterados.
+evitar definicoes duplicadas, copias temporarias removem includes de pacotes ja
+carregados e qualificam imports quando necessario; os arquivos originais nao
+sao alterados. O sv2v aumenta a cobertura da linguagem, mas construcoes nao
+sintetizaveis ou primitivas especificas de fabricante ainda podem ser rejeitadas.

@@ -61,6 +61,8 @@ proc ::svvs::theme::apply {root} {
     ttk::style configure Section.Panel.TLabel \
         -background $colors(panel) -foreground $colors(accent) \
         -font {{Segoe UI} 9 bold}
+    ttk::style configure Muted.Topbar.TLabel \
+        -background $colors(topbar) -foreground $colors(muted) -font {{Segoe UI} 9}
 
     ttk::style configure TButton \
         -background $colors(topbar) \

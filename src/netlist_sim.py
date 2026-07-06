@@ -10,6 +10,18 @@ from pathlib import Path
 
 UNKNOWN = None
 
+SEQUENTIAL_CELLS = {
+    "$dff", "$dffe", "$adff", "$adffe", "$sdff", "$sdffe", "$dlatch"
+}
+IGNORED_CELLS = {"$scopeinfo"}
+COMBINATIONAL_CELLS = {
+    "$not", "$_NOT_", "$pos", "$neg", "$and", "$_AND_", "$or", "$_OR_",
+    "$xor", "$_XOR_", "$xnor", "$add", "$sub", "$mul", "$shl", "$sshl",
+    "$shr", "$sshr", "$eq", "$eqx", "$ne", "$nex", "$lt", "$le", "$gt",
+    "$ge", "$logic_not", "$reduce_bool", "$logic_and", "$logic_or",
+    "$reduce_and", "$reduce_or", "$reduce_xor", "$mux", "$_MUX_", "$pmux",
+}
+
 
 def parameter_int(value, default=0):
     if isinstance(value, int):
@@ -41,7 +53,19 @@ class NetlistSimulator:
         self.previous_inputs: dict[str, int | None] = {}
         self.sequential = []
         self.combinational = []
+        unsupported = sorted(
+            {cell["type"] for cell in self.cells.values()}
+            - SEQUENTIAL_CELLS
+            - COMBINATIONAL_CELLS
+            - IGNORED_CELLS
+        )
+        if unsupported:
+            raise ValueError(
+                "Unsupported Yosys cells in Python engine: " + ", ".join(unsupported)
+            )
         for cell in self.cells.values():
+            if cell["type"] in IGNORED_CELLS:
+                continue
             if self.is_sequential(cell["type"]):
                 self.sequential.append(cell)
             else:
@@ -50,7 +74,7 @@ class NetlistSimulator:
 
     @staticmethod
     def is_sequential(kind):
-        return kind in {"$dff", "$dffe", "$adff", "$adffe", "$sdff", "$sdffe", "$dlatch"}
+        return kind in SEQUENTIAL_CELLS
 
     def reset(self):
         self.bits.clear()
@@ -242,7 +266,7 @@ class NetlistSimulator:
                         result = self.read_bits(b_bits[start : start + width])
                         break
         else:
-            return
+            raise ValueError(f"Unsupported cell during evaluation: {kind}")
         self.write_port(cell, "Y", result)
 
     def values(self):
@@ -274,9 +298,17 @@ def emit(kind, fields=()):
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: netlist_sim.py NETLIST.json TOP")
-    simulator = NetlistSimulator(sys.argv[1], sys.argv[2])
+    check_only = len(sys.argv) == 4 and sys.argv[1] == "--check"
+    if check_only:
+        path, top = sys.argv[2], sys.argv[3]
+    elif len(sys.argv) == 3:
+        path, top = sys.argv[1], sys.argv[2]
+    else:
+        raise SystemExit("usage: netlist_sim.py [--check] NETLIST.json TOP")
+    simulator = NetlistSimulator(path, top)
+    if check_only:
+        print("Python netlist compatibility: ok")
+        return
     descriptions = []
     for name, info in simulator.ports.items():
         descriptions.append(f"{name}:{info.get('direction', '')}:{len(info.get('bits', []))}")

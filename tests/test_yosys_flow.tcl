@@ -21,6 +21,7 @@ proc ::svvs::canvas_connections::exportConnectionData {} {
     return $result
 }
 source [file join $root src simulation_components.tcl]
+source [file join $root src sv_parser.tcl]
 source [file join $root src simulation_model.tcl]
 
 set producer [dict create name producer instance u_producer ports [list \
@@ -41,4 +42,20 @@ set ::svvs::canvas_blocks::blocks(c) [dict create module $consumer]
 set result [::svvs::simulation_model::prepare]
 if {![dict get $result ok]} { error [dict get $result message] }
 if {![file exists [dict get $result json]]} { error "netlist JSON was not generated" }
-puts "yosys flow test: ok"
+if {![dict exists $result converted] || ![file exists [dict get $result converted]]} {
+    error "sv2v output was not generated"
+}
+set handle [open [dict get $result converted] r]
+set converted [read $handle]
+close $handle
+if {![regexp {\mmodule\s+producer\M} $converted] || [regexp {\malways_ff\M|\mlogic\M} $converted]} {
+    error "SystemVerilog was not converted to Verilog"
+}
+set handle [open [dict get $result script] r]
+set script [read $handle]
+close $handle
+if {[string first "read_verilog -sv" $script] >= 0 ||
+    [string first [file tail [dict get $result converted]] $script] < 0} {
+    error "Yosys is not reading the sv2v output"
+}
+puts "sv2v + yosys flow test: ok"

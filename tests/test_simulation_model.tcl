@@ -56,6 +56,40 @@ if {$parsedNames ne {clk rst mem_rst mem_read mem_write addr}} {
 if {[dict get [lindex $parsedPorts end] width] != 2} {
     error "port width after comments was not parsed"
 }
+set typedHeader {
+module typed_ports (
+  input logic [7:0] a, b,
+  output vending_pkg::state_t state,
+  output logic done
+);
+endmodule
+}
+set typedPorts [::svvs::sv_parser::portsFromModuleText $typedHeader typed_ports]
+set typedNames {}
+foreach port $typedPorts { lappend typedNames [dict get $port name] }
+if {$typedNames ne {a b state done} || [dict get [lindex $typedPorts 1] width] != 8} {
+    error "package-typed or grouped ANSI ports were parsed incorrectly: $typedNames"
+}
+set bodyParenHeader {
+module body_parens #(
+  parameter int WIDTH = (2 + 2)
+) (
+  input logic clk,
+  output pkg::state_t state,
+  output logic change_load
+);
+logic internal;
+always_comb begin
+  if (internal) change_load = fn(a, b);
+end
+endmodule
+}
+set bodyPorts [::svvs::sv_parser::portsFromModuleText $bodyParenHeader body_parens]
+set bodyNames {}
+foreach port $bodyPorts { lappend bodyNames [dict get $port name] }
+if {$bodyNames ne {clk state change_load}} {
+    error "module body parentheses were mistaken for ports: $bodyNames"
+}
 
 set producer [dict create name producer instance u_producer ports [list \
     [dict create name data direction output width 8]]]

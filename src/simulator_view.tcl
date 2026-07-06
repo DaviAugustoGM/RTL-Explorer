@@ -5,7 +5,10 @@ namespace eval ::svvs::simulator_view {
     variable waveform ""
     variable statusLabel ""
     variable cycleLabel ""
+    variable pauseButton ""
     variable process ""
+    variable lastBuildResult ""
+    variable lastBackend ""
     variable running 0
     variable timer ""
     variable speed 4
@@ -37,6 +40,7 @@ proc ::svvs::simulator_view::create {parent} {
     variable outputPanel
     variable statusLabel
     variable cycleLabel
+    variable pauseButton
 
     set frame [ttk::frame $parent.inner -style TFrame]
     pack $frame -fill both -expand 1
@@ -44,25 +48,31 @@ proc ::svvs::simulator_view::create {parent} {
     set header [ttk::frame $frame.header -style Panel.TFrame -padding {14 10}]
     pack $header -side top -fill x
     ttk::label $header.title -text "Live simulation" -style Section.Panel.TLabel
-    ttk::label $header.subtitle -text "Yosys JSON netlist" -style Muted.Panel.TLabel
+    ttk::label $header.subtitle -text "sv2v + Yosys, selectable simulation engines" -style Muted.Panel.TLabel
     pack $header.title -side left
     pack $header.subtitle -side left -padx {10 0}
 
     set controls [ttk::frame $frame.controls -style Topbar.TFrame -padding {10 7}]
     pack $controls -side top -fill x
-    ttk::button $controls.build -text "Build" -style Tool.TButton \
-        -command ::svvs::simulator_view::build
     ttk::button $controls.run -text "Run" -style Tool.TButton \
         -command ::svvs::simulator_view::run
+    ttk::button $controls.buildRun -text "Build and Run" -style Tool.TButton \
+        -command ::svvs::simulator_view::buildAndRun
     ttk::button $controls.pause -text "Pause" -style Tool.TButton \
         -command ::svvs::simulator_view::pause
     ttk::button $controls.stop -text "Stop" -style Tool.TButton \
         -command ::svvs::simulator_view::stop
-    ttk::button $controls.step -text "Step" -style Tool.TButton \
-        -command ::svvs::simulator_view::step
-    foreach widget [list $controls.build $controls.run $controls.pause $controls.stop $controls.step] {
+    set pauseButton $controls.pause
+    foreach widget [list $controls.run $controls.buildRun $controls.pause $controls.stop] {
         pack $widget -side left -padx {0 3}
     }
+    ttk::label $controls.engineLabel -text "Engine" -style Muted.Topbar.TLabel
+    ttk::combobox $controls.engine -state readonly -width 11 \
+        -values {Automatic CXXRTL Icarus Python} \
+        -textvariable ::svvs::simulation_backends::selectedEngine
+    pack $controls.engineLabel -side left -padx {14 5}
+    pack $controls.engine -side left
+    bind $controls.engine <<ComboboxSelected>> {::svvs::simulator_view::engineChanged}
     set cycleLabel [label $controls.cycle -text "Cycle 0" \
         -background [::svvs::theme::color topbar] -foreground [::svvs::theme::color text]]
     pack $cycleLabel -side right -padx 10
@@ -70,20 +80,10 @@ proc ::svvs::simulator_view::create {parent} {
         -foreground [::svvs::theme::color warning] -font {{Segoe UI} 8 bold} -padx 8 -pady 3]
     pack $statusLabel -side right
 
-    set signals [ttk::frame $frame.signals -style Panel.TFrame -padding 12]
-    pack $signals -side top -fill both -expand 1
-
-    ttk::label $signals.inputTitle -text "INPUTS" -style Section.Panel.TLabel
-    pack $signals.inputTitle -anchor w -pady {0 7}
-    set inputPanel [ttk::frame $signals.inputs -style Panel.TFrame]
-    pack $inputPanel -fill x
-    ttk::separator $signals.divider -orient horizontal
-    pack $signals.divider -fill x -pady 12
-    ttk::label $signals.outputTitle -text "OUTPUTS" -style Section.Panel.TLabel
-    pack $signals.outputTitle -anchor w -pady {0 7}
-    set outputPanel [ttk::frame $signals.outputs -style Panel.TFrame]
-    pack $outputPanel -fill x
-    ::svvs::demo_scenarios::create $signals
+    # Signal state is still maintained for the diagram and waveforms, but the
+    # Simulation tab is intentionally limited to build/runtime configuration.
+    set inputPanel [ttk::frame $frame.inputState]
+    set outputPanel [ttk::frame $frame.outputState]
 
     after idle ::svvs::simulator_view::refreshSignals
     return $frame
@@ -103,6 +103,8 @@ proc ::svvs::simulator_view::createWaveformPanel {parent} {
     grid rowconfigure $frame 0 -weight 1
     bind $waveform <Configure> {::svvs::simulator_view::drawWaveforms}
     bind $waveform <MouseWheel> {::svvs::simulator_view::scrollWaveforms %D}
+    bind $waveform <Button-4> {::svvs::simulator_view::scrollWaveforms 1}
+    bind $waveform <Button-5> {::svvs::simulator_view::scrollWaveforms -1}
     after idle ::svvs::simulator_view::drawWaveforms
     return $frame
 }
@@ -199,9 +201,6 @@ proc ::svvs::simulator_view::renderSignalRows {} {
         grid $inputPanel.value$row -row $row -column 2 -sticky e
         incr row
     }
-    if {[llength [info commands ::svvs::demo_scenarios::refreshClockChoices]]} {
-        ::svvs::demo_scenarios::refreshClockChoices
-    }
     grid columnconfigure $inputPanel 0 -weight 1
     if {$row == 0} {
         ttk::label $inputPanel.empty -text "No external inputs" -style Muted.Panel.TLabel
@@ -230,9 +229,13 @@ proc ::svvs::simulator_view::renderSignalRows {} {
 }
 
 proc ::svvs::simulator_view::build {} {
-    variable process
     variable currentModel
+    variable lastBuildResult
+    variable lastBackend
     ::svvs::simulator_view::closeProcess
+    ::svvs::simulator_view::setPauseText "Pause"
+    set lastBuildResult ""
+    set lastBackend ""
     ::svvs::simulator_view::clearWaveformHistory
     ::svvs::simulator_view::setStatus "Building" idle
     update idletasks
@@ -242,21 +245,37 @@ proc ::svvs::simulator_view::build {} {
     if {![dict get $result ok]} {
         set message [dict get $result message]
         if {[dict exists $result missingTool]} {
-            ::svvs::simulator_view::setStatus "Yosys missing" error
+            set tool [dict get $result missingTool]
+            ::svvs::simulator_view::setStatus "[string totitle $tool] missing" error
         } else {
             ::svvs::simulator_view::setStatus "Build error" error
         }
         ::svvs::console::log $message error
         return 0
     }
-    set python [::svvs::simulation_model::pythonExecutable]
-    if {$python eq ""} {
-        ::svvs::simulator_view::setStatus "Python missing" error
-        ::svvs::console::log "Python nao foi encontrado para executar o netlist." error
+    set lastBuildResult $result
+    if {![::svvs::simulator_view::startBackend $result]} {
         return 0
     }
-    set script [file join $::APP_DIR netlist_sim.py]
-    set command [list | $python $script [dict get $result json] $::svvs::simulation_model::topModule]
+    ::svvs::console::log "Build concluida e pronta para simulacao." ok
+    return 1
+}
+
+proc ::svvs::simulator_view::startBackend {result {backend ""}} {
+    variable process
+    variable currentModel
+    variable lastBackend
+    set currentModel [dict get $result model]
+    if {$backend eq ""} {
+        set backend [::svvs::simulation_backends::prepare $result]
+    }
+    if {![dict get $backend ok]} {
+        ::svvs::simulator_view::setStatus "Engine error" error
+        ::svvs::console::log "Nenhum motor de simulacao pode iniciar:\n[dict get $backend message]" error
+        return 0
+    }
+    set lastBackend $backend
+    set command [linsert [dict get $backend command] 0 |]
     if {[catch {set process [open $command r+]} message]} {
         set process ""
         ::svvs::simulator_view::setStatus "Start error" error
@@ -265,10 +284,48 @@ proc ::svvs::simulator_view::build {} {
     }
     fconfigure $process -blocking 0 -buffering line -encoding utf-8
     fileevent $process readable ::svvs::simulator_view::readBackend
-    ::svvs::simulator_view::setStatus "Ready" ready
+    set engine [dict get $backend engine]
+    ::svvs::simulator_view::setStatus "$engine ready" ready
     ::svvs::diagram_simulation::activate $currentModel
-    ::svvs::console::log "Netlist sintetizado e simulador preparado." ok
+    if {[dict get $backend diagnostics] ne ""} {
+        ::svvs::console::log "Automatic engine fallback:\n[dict get $backend diagnostics]" warn
+    }
+    ::svvs::console::log "Motor ativo: $engine." ok
     return 1
+}
+
+proc ::svvs::simulator_view::buildAndRun {} {
+    if {[::svvs::simulator_view::build]} {
+        ::svvs::simulator_view::run
+    }
+}
+
+proc ::svvs::simulator_view::engineChanged {} {
+    variable process
+    variable lastBuildResult
+    variable lastBackend
+    if {$process ne ""} {
+        ::svvs::simulator_view::closeProcess
+    }
+    set lastBackend ""
+    set ::svvs::simulation_backends::activeEngine ""
+    if {$lastBuildResult eq ""} {
+        ::svvs::simulator_view::setStatus "Not built" idle
+    } else {
+        ::svvs::simulator_view::setStatus "Build available" ready
+    }
+    ::svvs::console::log "Motor selecionado: $::svvs::simulation_backends::selectedEngine." info
+}
+
+proc ::svvs::simulator_view::clearBuildCache {} {
+    variable lastBuildResult
+    variable lastBackend
+    ::svvs::simulator_view::closeProcess
+    set lastBuildResult ""
+    set lastBackend ""
+    set ::svvs::simulation_backends::activeEngine ""
+    ::svvs::simulator_view::setPauseText "Pause"
+    ::svvs::simulator_view::setStatus "Not built" idle
 }
 
 proc ::svvs::simulator_view::clearWaveformHistory {} {
@@ -309,8 +366,23 @@ proc ::svvs::simulator_view::initializeFsmWatches {} {
     variable fsmWatches
     array unset fsmWatches
     array set fsmWatches {}
+    set diagramModules {}
+    if {[info exists ::svvs::canvas_blocks::blocks]} {
+        foreach blockId [array names ::svvs::canvas_blocks::blocks] {
+            set block $::svvs::canvas_blocks::blocks($blockId)
+            if {![dict exists $block module]} { continue }
+            set module [dict get $block module]
+            if {[dict exists $module name]} {
+                lappend diagramModules [dict get $module name]
+            }
+        }
+    }
+    set diagramModules [lsort -unique $diagramModules]
     set index 0
     foreach fsm $::svvs::project_tree::fsms {
+        if {![dict exists $fsm module] || [dict get $fsm module] ni $diagramModules} {
+            continue
+        }
         set alias "__fsm_[incr index]"
         set fsmWatches($alias) $fsm
         ::svvs::simulator_view::send WATCH $alias \
@@ -373,6 +445,37 @@ proc ::svvs::simulator_view::setInputValue {name value} {
     ::svvs::simulator_view::applyInput $name
 }
 
+proc ::svvs::simulator_view::setPauseText {text} {
+    variable pauseButton
+    if {$pauseButton ne "" && [winfo exists $pauseButton]} {
+        $pauseButton configure -text $text
+    }
+    if {[info exists ::svvs::layout::widgets(toolbar:Pause)]} {
+        set widget $::svvs::layout::widgets(toolbar:Pause)
+        if {[winfo exists $widget]} { $widget configure -text $text }
+    }
+}
+
+proc ::svvs::simulator_view::startPreviousBuild {} {
+    variable lastBuildResult
+    variable lastBackend
+    variable currentModel
+    if {$lastBuildResult eq ""} {
+        ::svvs::simulator_view::setStatus "Build required" idle
+        ::svvs::console::log "Nenhuma build disponivel. Use Build and Run primeiro." warn
+        return 0
+    }
+    set latest [::svvs::simulation_model::diagramModel]
+    if {$latest ne [dict get $lastBuildResult model]} {
+        set currentModel $latest
+        ::svvs::simulator_view::setStatus "Build required" idle
+        ::svvs::console::log "O diagrama mudou. Use Build and Run para sintetizar novamente." warn
+        return 0
+    }
+    ::svvs::simulator_view::clearWaveformHistory
+    return [::svvs::simulator_view::startBackend $lastBuildResult $lastBackend]
+}
+
 proc ::svvs::simulator_view::run {} {
     variable process
     variable running
@@ -382,43 +485,63 @@ proc ::svvs::simulator_view::run {} {
     if {$process ne "" && $latest ne $currentModel} {
         ::svvs::simulator_view::closeProcess
         set currentModel $latest
+        ::svvs::simulator_view::setStatus "Build required" idle
+        ::svvs::console::log "O diagrama mudou. Use Build and Run para sintetizar novamente." warn
+        return
     }
-    if {$process eq "" && ![::svvs::simulator_view::build]} { return }
+    if {$process eq "" && ![::svvs::simulator_view::startPreviousBuild]} { return }
     if {!$::svvs::diagram_simulation::active} {
         ::svvs::diagram_simulation::activate $currentModel
     }
     set running 1
+    ::svvs::simulator_view::setPauseText "Pause"
     ::svvs::simulator_view::setStatus "Running" running
+    ::svvs::layout::setToolbarActive "Run" 1
     ::svvs::layout::setToolbarActive "Pause" 0
     ::svvs::simulator_view::schedule
 }
 
 proc ::svvs::simulator_view::pause {} {
+    variable process
     variable running
     variable timer
+    if {!$running} {
+        if {$process eq ""} { return }
+        ::svvs::simulator_view::run
+        return
+    }
     set running 0
     if {$timer ne ""} { after cancel $timer; set timer "" }
+    ::svvs::simulator_view::setPauseText "Continue"
     ::svvs::simulator_view::setStatus "Paused" paused
     ::svvs::layout::setToolbarActive "Run" 0
     ::svvs::layout::setToolbarActive "Pause" 1
 }
 
 proc ::svvs::simulator_view::stop {} {
+    variable running
+    variable timer
     variable cycle
     variable cycleLabel
     variable clockStates
     variable clockNext
-    ::svvs::simulator_view::pause
+    variable lastBuildResult
+    set running 0
+    if {$timer ne ""} { after cancel $timer; set timer "" }
+    ::svvs::simulator_view::closeProcess
     set cycle 0
     if {$cycleLabel ne "" && [winfo exists $cycleLabel]} { $cycleLabel configure -text "Cycle 0" }
-    ::svvs::simulator_view::send RESET
     array unset clockStates
     array unset clockNext
     array set clockStates {}
     array set clockNext {}
-    ::svvs::simulator_view::initializeInputs
-    ::svvs::simulator_view::setStatus "Stopped" idle
-    ::svvs::diagram_simulation::deactivate
+    ::svvs::simulator_view::setPauseText "Pause"
+    if {$lastBuildResult eq ""} {
+        ::svvs::simulator_view::setStatus "Stopped" idle
+    } else {
+        ::svvs::simulator_view::setStatus "Build available" ready
+    }
+    ::svvs::layout::setToolbarActive "Run" 0
     ::svvs::layout::setToolbarActive "Pause" 0
 }
 
@@ -433,7 +556,7 @@ proc ::svvs::simulator_view::step {} {
         ::svvs::simulator_view::closeProcess
         set currentModel $latest
     }
-    if {$process eq "" && ![::svvs::simulator_view::build]} { return }
+    if {$process eq "" && ![::svvs::simulator_view::startPreviousBuild]} { return }
     if {!$::svvs::diagram_simulation::active} {
         ::svvs::diagram_simulation::activate $currentModel
     }
@@ -443,12 +566,10 @@ proc ::svvs::simulator_view::step {} {
             set name [dict get $clock name]
             ::svvs::simulator_view::send SET $name 0
             ::svvs::simulator_view::send SET $name 1
-            ::svvs::demo_scenarios::clockEdge $name rising
         }
     } elseif {$clockSignal ne ""} {
         ::svvs::simulator_view::send SET $clockSignal 0
         ::svvs::simulator_view::send SET $clockSignal 1
-        ::svvs::demo_scenarios::clockEdge $clockSignal rising
     } else {
         ::svvs::simulator_view::send EVAL
     }
@@ -482,8 +603,6 @@ proc ::svvs::simulator_view::schedule {} {
                 set clockStates($name) [expr {!$clockStates($name)}]
                 ::svvs::simulator_view::send SET $name $clockStates($name)
                 set clockNext($name) [expr {$now + $halfPeriod}]
-                ::svvs::demo_scenarios::clockEdge $name \
-                    [expr {$clockStates($name) ? "rising" : "falling"}]
                 if {$clockStates($name)} {
                     incr cycle
                     $cycleLabel configure -text "Cycle $cycle"

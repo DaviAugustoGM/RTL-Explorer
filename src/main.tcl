@@ -4,6 +4,8 @@ package require Tk
 
 set ::APP_DIR [file dirname [file normalize [info script]]]
 
+source [file join $::APP_DIR toolchain.tcl]
+::svvs::toolchain::activate
 source [file join $::APP_DIR theme.tcl]
 source [file join $::APP_DIR console.tcl]
 source [file join $::APP_DIR properties_panel.tcl]
@@ -14,7 +16,7 @@ source [file join $::APP_DIR fsm_viewer.tcl]
 source [file join $::APP_DIR simulation_model.tcl]
 source [file join $::APP_DIR simulation_components.tcl]
 source [file join $::APP_DIR diagram_simulation.tcl]
-source [file join $::APP_DIR demo_scenarios.tcl]
+source [file join $::APP_DIR simulation_backends.tcl]
 source [file join $::APP_DIR simulator_view.tcl]
 source [file join $::APP_DIR documentation.tcl]
 source [file join $::APP_DIR sv_parser.tcl]
@@ -55,7 +57,6 @@ proc ::svvs::boot {} {
     bind . <Control-p> {::svvs::pdf_export::exportCurrent}
     bind . <Control-f> {::svvs::console::log "Busca acionada (placeholder)."}
     bind . <F5> {::svvs::simulator_view::run}
-    bind . <F10> {::svvs::simulator_view::step}
     wm protocol . WM_DELETE_WINDOW {
         ::svvs::simulator_view::closeProcess
         destroy .

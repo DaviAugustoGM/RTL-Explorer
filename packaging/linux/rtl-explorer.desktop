@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=RTL Explorer
+Comment=Explore and simulate SystemVerilog diagrams
+Exec=/opt/rtl-explorer/rtl-explorer
+Icon=/opt/rtl-explorer/assets/icons/project.png
+Terminal=false
+Categories=Development;Electronics;
