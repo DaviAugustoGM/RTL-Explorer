@@ -47,10 +47,21 @@ proc ::svvs::simulation_model::diagramModel {} {
         }
     }
 
-    foreach connection [::svvs::canvas_connections::exportConnectionData] {
+    set connections [::svvs::canvas_connections::exportConnectionData]
+    set slicedConnections {}
+    set sliceDrivenPorts {}
+    foreach connection $connections {
         set from [dict get $connection from]
         set to [dict get $connection to]
         if {![dict exists $allPorts $from] || ![dict exists $allPorts $to]} {
+            continue
+        }
+        if {[::svvs::simulation_model::connectionHasSlice $connection]} {
+            set directed [::svvs::simulation_model::directedConnection $connection $allPorts]
+            if {$directed ne ""} {
+                lappend slicedConnections $directed
+                dict set sliceDrivenPorts [dict get $directed target] 1
+            }
             continue
         }
         dict lappend adjacency $from $to
@@ -90,6 +101,7 @@ proc ::svvs::simulation_model::diagramModel {} {
     set traces {}
     set signalBlocks {}
     set clocks {}
+    set sliceAssignments {}
     set netIndex 0
     foreach members $components {
         incr netIndex
@@ -135,7 +147,14 @@ proc ::svvs::simulation_model::diagramModel {} {
         lappend nets [dict create name $netName width $width members $members]
 
         set inputName ""
-        if {[llength $drivers] == 0} {
+        set drivenBySlice 0
+        foreach record $members {
+            if {[dict exists $sliceDrivenPorts [dict get $record tag]]} {
+                set drivenBySlice 1
+                break
+            }
+        }
+        if {[llength $drivers] == 0 && !$drivenBySlice} {
             if {[llength $virtualSources] > 0} {
                 set first [lindex $virtualSources 0]
             } elseif {[llength $sinks] > 0} {
@@ -195,9 +214,82 @@ proc ::svvs::simulation_model::diagramModel {} {
         }
     }
 
+    foreach connection $slicedConnections {
+        set sourceTag [dict get $connection source]
+        set targetTag [dict get $connection target]
+        if {![dict exists $portNets $sourceTag] || ![dict exists $portNets $targetTag]} {
+            continue
+        }
+        set sourceRecord [dict get $allPorts $sourceTag]
+        set targetRecord [dict get $allPorts $targetTag]
+        set sourceWidth [dict get [dict get $sourceRecord port] width]
+        set targetWidth [dict get [dict get $targetRecord port] width]
+        set sourceRange [dict get $connection sourceRange]
+        set targetRange [dict get $connection targetRange]
+        set sourceSliceWidth [::svvs::simulation_model::rangeWidthOrPort $sourceRange $sourceWidth]
+        set targetSliceWidth [::svvs::simulation_model::rangeWidthOrPort $targetRange $targetWidth]
+        if {$sourceSliceWidth != $targetSliceWidth} {
+            set sourceModule [dict get $sourceRecord module]
+            set sourcePort [dict get $sourceRecord port]
+            set targetModule [dict get $targetRecord module]
+            set targetPort [dict get $targetRecord port]
+            lappend errors \
+                "Uma conexao com faixa possui larguras diferentes: [dict get $sourceModule instance].[dict get $sourcePort name] ($sourceSliceWidth) -> [dict get $targetModule instance].[dict get $targetPort name] ($targetSliceWidth)."
+            continue
+        }
+        lappend sliceAssignments [dict create \
+            source [::svvs::simulation_model::rangeExpression [dict get $portNets $sourceTag] $sourceRange] \
+            target [::svvs::simulation_model::rangeExpression [dict get $portNets $targetTag] $targetRange] \
+            width $sourceSliceWidth]
+    }
+
     return [dict create \
         inputs $inputs outputs $outputs nets $nets portNets $portNets errors $errors \
-        traces $traces signalBlocks $signalBlocks clocks $clocks]
+        traces $traces signalBlocks $signalBlocks clocks $clocks \
+        sliceAssignments $sliceAssignments]
+}
+
+proc ::svvs::simulation_model::connectionHasSlice {connection} {
+    foreach key {fromRange toRange} {
+        if {[dict exists $connection $key] && [dict get $connection $key] ne ""} {
+            return 1
+        }
+    }
+    return 0
+}
+
+proc ::svvs::simulation_model::directedConnection {connection allPorts} {
+    set from [dict get $connection from]
+    set to [dict get $connection to]
+    set fromPort [dict get [dict get $allPorts $from] port]
+    set toPort [dict get [dict get $allPorts $to] port]
+    set fromRange [expr {[dict exists $connection fromRange] ? [dict get $connection fromRange] : ""}]
+    set toRange [expr {[dict exists $connection toRange] ? [dict get $connection toRange] : ""}]
+    if {[dict get $fromPort direction] eq "output" && [dict get $toPort direction] eq "input"} {
+        return [dict create source $from target $to sourceRange $fromRange targetRange $toRange]
+    }
+    if {[dict get $toPort direction] eq "output" && [dict get $fromPort direction] eq "input"} {
+        return [dict create source $to target $from sourceRange $toRange targetRange $fromRange]
+    }
+    return [dict create source $from target $to sourceRange $fromRange targetRange $toRange]
+}
+
+proc ::svvs::simulation_model::rangeWidthOrPort {range portWidth} {
+    if {$range eq ""} {
+        return $portWidth
+    }
+    if {[regexp {^\s*([0-9]+)(?:\s*:\s*([0-9]+))?\s*$} $range -> left right]} {
+        if {$right eq ""} { set right $left }
+        return [expr {abs($left - $right) + 1}]
+    }
+    return $portWidth
+}
+
+proc ::svvs::simulation_model::rangeExpression {net range} {
+    if {$range eq ""} {
+        return $net
+    }
+    return "${net}\[[string trim $range]\]"
 }
 
 proc ::svvs::simulation_model::widthDecl {width} {
@@ -232,6 +324,11 @@ proc ::svvs::simulation_model::writeTop {path model} {
     }
     foreach signal [dict get $model outputs] {
         lappend lines "    assign [dict get $signal name] = [dict get $signal net];"
+    }
+    if {[dict exists $model sliceAssignments]} {
+        foreach assignment [dict get $model sliceAssignments] {
+            lappend lines "    assign [dict get $assignment target] = [dict get $assignment source];"
+        }
     }
     lappend lines ""
 

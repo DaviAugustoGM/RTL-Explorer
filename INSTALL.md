@@ -36,6 +36,8 @@ make install
 
 This installs everything under `~/.local/share/rtl-explorer`. Tcl/Tk and the C++ compiler are placed in a private runtime using micromamba; OSS CAD Suite provides Python, Yosys and Icarus. No administrator permission or system package manager is used.
 
+The user-local installation uses a `sv2v` build compatible with older glibc releases, including Rocky Linux 8.
+
 Start the program from the application menu or with:
 
 ```sh

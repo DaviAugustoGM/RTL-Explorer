@@ -31,6 +31,155 @@ proc ::svvs::simulation_components::isBuiltin {module} {
     }}]
 }
 
+proc ::svvs::simulation_components::templateByKind {kind} {
+    foreach module [::svvs::project_tree::builtinModules simulation] {
+        if {[::svvs::simulation_components::kind $module] eq $kind} {
+            return $module
+        }
+    }
+    return ""
+}
+
+proc ::svvs::simulation_components::portConnectedToKind {portTag kind} {
+    foreach id [array names ::svvs::canvas_connections::connections] {
+        set conn $::svvs::canvas_connections::connections($id)
+        set other ""
+        if {[dict get $conn from] eq $portTag} {
+            set other [dict get $conn to]
+        } elseif {[dict get $conn to] eq $portTag} {
+            set other [dict get $conn from]
+        }
+        if {$other eq "" || ![info exists ::svvs::canvas_blocks::tagToBlock($other)]} {
+            continue
+        }
+        set blockId $::svvs::canvas_blocks::tagToBlock($other)
+        if {![info exists ::svvs::canvas_blocks::blocks($blockId)]} {
+            continue
+        }
+        set module [dict get $::svvs::canvas_blocks::blocks($blockId) module]
+        if {[::svvs::simulation_components::kind $module] eq $kind} {
+            return 1
+        }
+    }
+    return 0
+}
+
+proc ::svvs::simulation_components::configuredSignalModule {kind portName width} {
+    set module [::svvs::simulation_components::templateByKind $kind]
+    if {$module eq ""} { return "" }
+    dict set module simulationConfig bitWidth $width
+    dict set module simulationConfig label $portName
+    dict set module simulationConfig nameAssigned 1
+    if {$kind eq "probe"} {
+        dict set module simulationConfig base hex
+    }
+    set updatedPorts {}
+    foreach port [dict get $module ports] {
+        dict set port width $width
+        lappend updatedPorts $port
+    }
+    dict set module ports $updatedPorts
+    return [::svvs::canvas_blocks::nextInstanceModule $module]
+}
+
+proc ::svvs::simulation_components::clockPortName {name width} {
+    if {$width != 1} { return 0 }
+    return [regexp -nocase {^(clk|clock|.*_clk|.*_clock)$} $name]
+}
+
+proc ::svvs::simulation_components::portConnectedToVirtualSource {portTag} {
+    return [expr {
+        [::svvs::simulation_components::portConnectedToKind $portTag input] ||
+        [::svvs::simulation_components::portConnectedToKind $portTag clock]
+    }]
+}
+
+proc ::svvs::simulation_components::autoIoForSelected {mode} {
+    set blockId [::svvs::canvas_blocks::selectedBlockId]
+    if {$blockId eq ""} {
+        ::svvs::console::log "Selecione um modulo no diagrama antes de autoconectar entradas ou saidas." warn
+        return 0
+    }
+    return [::svvs::simulation_components::autoIoForBlock $blockId $mode]
+}
+
+proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
+    if {![info exists ::svvs::canvas_blocks::blocks($blockId)]} {
+        return 0
+    }
+    set targetBlock $::svvs::canvas_blocks::blocks($blockId)
+    set targetModule [dict get $targetBlock module]
+    if {[::svvs::simulation_components::isVirtual $targetModule]} {
+        ::svvs::console::log "Escolha um modulo Verilog/SystemVerilog, nao um bloco de sinal." warn
+        return 0
+    }
+
+    set x [dict get $targetBlock x]
+    set y [dict get $targetBlock y]
+    set width [dict get $targetBlock width]
+    set inputCount 0
+    set clockCount 0
+    set outputCount 0
+    set created 0
+    foreach port [dict get $targetModule ports] {
+        set direction [dict get $port direction]
+        set portName [dict get $port name]
+        set portWidth [dict get $port width]
+        set portTag "port:$blockId:$portName"
+        if {![info exists ::svvs::canvas_blocks::tagToPort($portTag)]} {
+            continue
+        }
+        set center [::svvs::canvas_blocks::portCenter $portTag]
+        set portY [lindex $center 1]
+
+        if {$direction eq "input" && $mode in {inputs both}} {
+            if {[::svvs::simulation_components::portConnectedToVirtualSource $portTag]} {
+                continue
+            }
+            if {[::svvs::simulation_components::clockPortName $portName $portWidth]} {
+                set sourceKind clock
+            } else {
+                set sourceKind input
+            }
+            set module [::svvs::simulation_components::configuredSignalModule \
+                $sourceKind $portName $portWidth]
+            if {$module eq ""} { continue }
+            set signalX [expr {$x - 92}]
+            set signalY [expr {$portY - 22}]
+            set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
+            if {$sourceKind eq "clock"} {
+                ::svvs::canvas_connections::drawConnection "port:$newId:clk" $portTag $portWidth
+                incr clockCount
+            } else {
+                ::svvs::canvas_connections::drawConnection "port:$newId:out" $portTag $portWidth
+                incr inputCount
+            }
+            incr created
+        } elseif {$direction eq "output" && $mode in {outputs both}} {
+            if {[::svvs::simulation_components::portConnectedToKind $portTag probe]} {
+                continue
+            }
+            set module [::svvs::simulation_components::configuredSignalModule probe $portName $portWidth]
+            if {$module eq ""} { continue }
+            set signalX [expr {$x + $width + 28}]
+            set signalY [expr {$portY - 22}]
+            set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
+            ::svvs::canvas_connections::drawConnection $portTag "port:$newId:in" $portWidth
+            incr outputCount
+            incr created
+        }
+    }
+    ::svvs::canvas_connections::refreshAll
+    if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
+    if {$created == 0} {
+        ::svvs::console::log "Nenhum bloco de I/O novo foi criado. As portas podem ja estar conectadas." warn
+    } else {
+        ::svvs::console::log \
+            "Auto I/O: $inputCount entrada(s), $clockCount clock(s) e $outputCount saida(s) criadas." ok
+    }
+    return $created
+}
+
 proc ::svvs::simulation_components::config {module key default} {
     if {[dict exists $module simulationConfig $key]} {
         return [dict get $module simulationConfig $key]
@@ -252,8 +401,9 @@ proc ::svvs::simulation_components::updateDisplay {id {liveValue ""}} {
         } elseif {$kind eq "probe"} {
             set display "X"
         } else {
-            set display [::svvs::simulation_components::formatValue \
-                [::svvs::simulation_components::config $module value 0] $width $base]
+            set valueMap [::svvs::simulation_components::config $module valueMap {}]
+            set display [::svvs::simulation_components::formatMappedValue \
+                [::svvs::simulation_components::config $module value 0] $width $base $valueMap]
         }
     } else {
         set valueMap [::svvs::simulation_components::config $module valueMap {}]
@@ -307,9 +457,17 @@ proc ::svvs::simulation_components::showMenu {id rootX rootY {post 1}} {
             -command [list ::svvs::simulation_components::setClickAction $id pulse]
         .signalBlockMenu add cascade -label "Click action" -menu .signalBlockMenu.clickAction
     }
-    if {$kind eq "probe"} {
+    if {$kind in {input probe}} {
         .signalBlockMenu add command -label "Value labels..." \
             -command [list ::svvs::simulation_components::valueMapDialog $id]
+        .signalBlockMenu add command -label "Clear value labels" \
+            -command [list ::svvs::simulation_components::clearValueMapForBlock $id]
+        menu .signalBlockMenu.valueFiles -tearoff 0
+        .signalBlockMenu.valueFiles add command -label "Load for this block..." \
+            -command [list ::svvs::simulation_components::importValueMapForBlockDialog $id]
+        .signalBlockMenu.valueFiles add command -label "Save this block..." \
+            -command [list ::svvs::simulation_components::exportValueMapForBlockDialog $id]
+        .signalBlockMenu add cascade -label "Value label file" -menu .signalBlockMenu.valueFiles
     }
     if {$kind eq "clock"} {
         .signalBlockMenu add command -label "Set frequency..." \
@@ -373,6 +531,8 @@ proc ::svvs::simulation_components::commitName {} {
 
 proc ::svvs::simulation_components::setBase {id base} {
     ::svvs::simulation_components::setConfig $id base $base
+    ::svvs::simulation_components::clearValueMapForBlock $id 1
+    ::svvs::console::log "Formato numerico alterado; mapeamento do bloco removido."
 }
 
 proc ::svvs::simulation_components::setClickAction {id action} {
@@ -496,6 +656,250 @@ proc ::svvs::simulation_components::removeValueMapEntry {} {
     ::svvs::simulation_components::refreshValueMapEditor
 }
 
+proc ::svvs::simulation_components::clearValueMapForBlock {id {silent 0}} {
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return 0 }
+    set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+    if {[::svvs::simulation_components::kind $module] ni {input probe}} {
+        return 0
+    }
+    set valueMap [::svvs::simulation_components::config $module valueMap {}]
+    if {[dict size $valueMap] == 0} {
+        if {!$silent} {
+            ::svvs::console::log "Este bloco nao possui mapeamento de valores." warn
+        }
+        return 0
+    }
+    ::svvs::simulation_components::setConfig $id valueMap {}
+    if {[winfo exists .valueMapEditor]} {
+        ::svvs::simulation_components::refreshValueMapEditor
+    }
+    if {!$silent} {
+        ::svvs::console::log "Mapeamento de valores removido do bloco." ok
+    }
+    return 1
+}
+
+proc ::svvs::simulation_components::clearAllValueMaps {} {
+    set count 0
+    foreach id [lsort [array names ::svvs::canvas_blocks::blocks]] {
+        if {[::svvs::simulation_components::clearValueMapForBlock $id 1]} {
+            incr count
+        }
+    }
+    if {$count == 0} {
+        ::svvs::console::log "Nenhum mapeamento de valores para remover." warn
+    } else {
+        ::svvs::console::log "Mapeamentos removidos de $count bloco(s)." ok
+    }
+    if {[winfo exists .valueMapEditor]} {
+        ::svvs::simulation_components::refreshValueMapEditor
+    }
+    return $count
+}
+
+proc ::svvs::simulation_components::blockMapKey {id} {
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return "" }
+    set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+    set label [::svvs::simulation_components::config $module label ""]
+    if {$label ne ""} { return $label }
+    return [dict get $module instance]
+}
+
+proc ::svvs::simulation_components::parseValueMapFile {path} {
+    set fh [open $path r]
+    fconfigure $fh -encoding utf-8
+    set text [read $fh]
+    close $fh
+
+    set maps {}
+    set current default
+    foreach rawLine [split $text "\n"] {
+        set line [string trim $rawLine]
+        if {$line eq "" || [string match "#*" $line] || [string match "//*" $line]} {
+            continue
+        }
+        if {[regexp {^\[([^\]]+)\]$} $line -> section]} {
+            set current [string trim $section]
+            continue
+        }
+        if {[regexp {^["']?([A-Za-z_][A-Za-z0-9_.$]*)["']?\s*[:=]\s*\x7b} $line -> section]} {
+            set current [string trim $section]
+            continue
+        }
+        if {[string index $line 0] eq [format %c 125]} {
+            set current default
+            continue
+        }
+
+        set signal ""
+        set value ""
+        set label ""
+        if {[regexp {^([^,;=]+)[,;]\s*([^,;=]+)[,;]\s*(.+)$} $line -> signal value label]} {
+            set signal [string trim $signal]
+        } elseif {[regexp {^([^=:]+)\s*[:=]\s*(.+)$} $line -> value label]} {
+            set signal $current
+        } elseif {[regexp {"([^"]+)"\s*:\s*"([^"]+)"} $line -> value label]} {
+            set signal $current
+        } else {
+            continue
+        }
+        set parsed [::svvs::simulation_components::parseMappedValue $value]
+        set label [string trim $label]
+        regsub {,$} $label "" label
+        set label [string trim $label {"' }]
+        if {![lindex $parsed 0] || $label eq ""} {
+            continue
+        }
+        dict set maps $signal [lindex $parsed 1] $label
+    }
+    return $maps
+}
+
+proc ::svvs::simulation_components::serializeValueMaps {maps} {
+    set lines [list "# RTL Explorer value maps" "# Use sections by signal name: \[signal_name\]" ""]
+    foreach signal [lsort [dict keys $maps]] {
+        lappend lines "\[$signal\]"
+        set valueMap [dict get $maps $signal]
+        foreach value [lsort -integer [dict keys $valueMap]] {
+            lappend lines "$value = [dict get $valueMap $value]"
+        }
+        lappend lines ""
+    }
+    return [join $lines "\n"]
+}
+
+proc ::svvs::simulation_components::signalValueMaps {} {
+    set maps {}
+    foreach id [lsort [array names ::svvs::canvas_blocks::blocks]] {
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        if {[::svvs::simulation_components::kind $module] ni {input probe}} {
+            continue
+        }
+        set valueMap [::svvs::simulation_components::config $module valueMap {}]
+        if {[dict size $valueMap] == 0} {
+            continue
+        }
+        dict set maps [::svvs::simulation_components::blockMapKey $id] $valueMap
+    }
+    return $maps
+}
+
+proc ::svvs::simulation_components::applyValueMaps {maps {targetBlock ""}} {
+    set applied 0
+    foreach id [lsort [array names ::svvs::canvas_blocks::blocks]] {
+        if {$targetBlock ne "" && $id ne $targetBlock} {
+            continue
+        }
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        if {[::svvs::simulation_components::kind $module] ni {input probe}} {
+            continue
+        }
+        set key [::svvs::simulation_components::blockMapKey $id]
+        set map ""
+        if {[dict exists $maps $key]} {
+            set map [dict get $maps $key]
+        } elseif {[dict exists $maps default]} {
+            set map [dict get $maps default]
+        }
+        if {$map eq ""} {
+            continue
+        }
+        ::svvs::simulation_components::setConfig $id valueMap $map
+        incr applied
+    }
+    return $applied
+}
+
+proc ::svvs::simulation_components::importValueMapsDialog {} {
+    set path [tk_getOpenFile \
+        -title "Import signal value maps" \
+        -filetypes {
+            {"Value map files" {.txt .map .py}}
+            {"Text files" {.txt}}
+            {"Python files" {.py}}
+            {"All files" {*}}
+        }]
+    if {$path eq ""} { return }
+    ::svvs::simulation_components::importValueMapsFrom $path
+}
+
+proc ::svvs::simulation_components::importValueMapsFrom {path {targetBlock ""}} {
+    if {[catch {set maps [::svvs::simulation_components::parseValueMapFile $path]} err]} {
+        ::svvs::console::log "Erro ao ler mapas de valores: $err" error
+        return 0
+    }
+    set applied [::svvs::simulation_components::applyValueMaps $maps $targetBlock]
+    if {$applied == 0} {
+        ::svvs::console::log "Nenhum mapa de valor combinou com os blocos de sinal atuais." warn
+    } else {
+        ::svvs::console::log "Mapas de valores aplicados em $applied bloco(s)." ok
+    }
+    return $applied
+}
+
+proc ::svvs::simulation_components::exportValueMapsDialog {} {
+    set path [tk_getSaveFile \
+        -title "Export signal value maps" \
+        -defaultextension ".txt" \
+        -filetypes {
+            {"Value map files" {.txt .map}}
+            {"Python files" {.py}}
+            {"All files" {*}}
+        }]
+    if {$path eq ""} { return }
+    ::svvs::simulation_components::exportValueMapsTo $path
+}
+
+proc ::svvs::simulation_components::exportValueMapsTo {path {targetBlock ""}} {
+    if {$targetBlock eq ""} {
+        set maps [::svvs::simulation_components::signalValueMaps]
+    } else {
+        if {![info exists ::svvs::canvas_blocks::blocks($targetBlock)]} { return 0 }
+        set module [dict get $::svvs::canvas_blocks::blocks($targetBlock) module]
+        set maps [dict create [::svvs::simulation_components::blockMapKey $targetBlock] \
+            [::svvs::simulation_components::config $module valueMap {}]]
+    }
+    if {[dict size $maps] == 0} {
+        ::svvs::console::log "Nenhum mapa de valor para salvar." warn
+        return 0
+    }
+    if {[catch {
+        set fh [open $path w]
+        fconfigure $fh -encoding utf-8 -translation lf
+        puts $fh [::svvs::simulation_components::serializeValueMaps $maps]
+        close $fh
+    } err]} {
+        catch {close $fh}
+        ::svvs::console::log "Erro ao salvar mapas de valores: $err" error
+        return 0
+    }
+    ::svvs::console::log "Mapas de valores salvos: $path" ok
+    return 1
+}
+
+proc ::svvs::simulation_components::importValueMapForBlockDialog {id} {
+    set path [tk_getOpenFile \
+        -title "Load value labels for this block" \
+        -filetypes {
+            {"Value map files" {.txt .map .py}}
+            {"All files" {*}}
+        }]
+    if {$path eq ""} { return }
+    ::svvs::simulation_components::importValueMapsFrom $path $id
+}
+
+proc ::svvs::simulation_components::exportValueMapForBlockDialog {id} {
+    set path [tk_getSaveFile \
+        -title "Save value labels for this block" \
+        -defaultextension ".txt" \
+        -filetypes {
+            {"Value map files" {.txt .map}}
+            {"All files" {*}}
+        }]
+    if {$path eq ""} { return }
+    ::svvs::simulation_components::exportValueMapsTo $path $id
+}
+
 proc ::svvs::simulation_components::activateBlock {id} {
     if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
     set module [dict get $::svvs::canvas_blocks::blocks($id) module]
@@ -571,8 +975,14 @@ proc ::svvs::simulation_components::toggleTrace {id} {
 }
 
 proc ::svvs::simulation_components::onDoubleClick {x y} {
-    set blockTag [::svvs::canvas_blocks::tagAt $x $y "block:"]
-    if {$blockTag eq ""} { return }
+    set hit [::svvs::canvas_blocks::hitAt $x $y]
+    if {$hit eq ""} { return }
+    if {[dict get $hit kind] eq "connection"} {
+        ::svvs::canvas_connections::editAt $x $y
+        return
+    }
+    if {[dict get $hit kind] ne "block"} { return }
+    set blockTag [dict get $hit tag]
     set id [::svvs::canvas_blocks::blockIdFromTag $blockTag]
     if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
     set module [dict get $::svvs::canvas_blocks::blocks($id) module]
@@ -697,7 +1107,7 @@ proc ::svvs::simulation_components::propertyLines {module} {
         if {[::svvs::simulation_components::config $module bitWidth 1] == 1} { set action toggle }
         lappend lines "Click action: $action"
     }
-    if {$kind eq "probe"} {
+    if {$kind in {input probe}} {
         set labelCount [dict size [::svvs::simulation_components::config $module valueMap {}]]
         lappend lines "Value labels: $labelCount"
     }

@@ -1,5 +1,9 @@
 namespace eval ::svvs::sv_parser {}
 
+proc ::tcl::mathfunc::clog2 {value} {
+    return [::svvs::sv_parser::clog2 $value]
+}
+
 proc ::svvs::sv_parser::parseFiles {paths} {
     ::svvs::console::log "Parser SystemVerilog ainda e placeholder. Arquivos recebidos: [llength $paths]"
     return [dict create files $paths modules {} connections {} diagrams {}]
@@ -351,6 +355,224 @@ proc ::svvs::sv_parser::moduleNamesFromText {text} {
     return $names
 }
 
+proc ::svvs::sv_parser::structuralConnectionsFromFiles {paths moduleNames} {
+    set hints {}
+    set sources {}
+    set modulePortOrder {}
+    foreach path $paths {
+        if {![file exists $path]} {
+            continue
+        }
+        set fh [open $path r]
+        set text [read $fh]
+        close $fh
+        set clean [::svvs::sv_parser::stripComments $text]
+        lappend sources [dict create path $path text $clean]
+        foreach moduleName [::svvs::sv_parser::moduleNamesFromText $clean] {
+            if {[lsearch -exact $moduleNames $moduleName] < 0} {
+                continue
+            }
+            set order {}
+            foreach port [::svvs::sv_parser::portsFromModuleText $clean $moduleName] {
+                lappend order [dict get $port name]
+            }
+            dict set modulePortOrder $moduleName $order
+        }
+    }
+
+    foreach source $sources {
+        set clean [dict get $source text]
+        foreach moduleName [::svvs::sv_parser::moduleNamesFromText $clean] {
+            set moduleText [::svvs::sv_parser::moduleText $clean $moduleName]
+            set instances [::svvs::sv_parser::moduleInstantiationsFromText \
+                $moduleText $moduleName $moduleNames $modulePortOrder]
+            foreach hint [::svvs::sv_parser::connectionHintsFromInstantiations $instances] {
+                lappend hints $hint
+            }
+        }
+    }
+    return $hints
+}
+
+proc ::svvs::sv_parser::moduleInstantiationsFromText {text ownerModule moduleNames {modulePortOrder {}}} {
+    set instances {}
+    foreach type [lsort -unique $moduleNames] {
+        if {[string equal -nocase $type $ownerModule]} {
+            continue
+        }
+        set escaped [regsub -all {([][(){}.*+?^$\\|])} $type {\\\1}]
+        set offset 0
+        while {[regexp -indices -start $offset -nocase -- "\\m${escaped}\\M" $text match]} {
+            set pos [expr {[lindex $match 1] + 1}]
+            set offset $pos
+            if {[::svvs::sv_parser::isModuleDeclarationAt $text [lindex $match 0]]} {
+                continue
+            }
+            set pos [::svvs::sv_parser::skipSpaces $text $pos]
+            if {[string index $text $pos] eq "#"} {
+                set open [string first "(" $text $pos]
+                if {$open < 0} { continue }
+                set close [::svvs::sv_parser::matchingParen $text $open]
+                if {$close < 0} { continue }
+                set pos [::svvs::sv_parser::skipSpaces $text [expr {$close + 1}]]
+            }
+            if {![regexp -indices -start $pos -- {\m([A-Za-z_][A-Za-z0-9_$]*)\M} \
+                    $text instanceMatch nameRange]} {
+                continue
+            }
+            if {[lindex $instanceMatch 0] != $pos} {
+                continue
+            }
+            set instance [string range $text {*}$nameRange]
+            set pos [::svvs::sv_parser::skipSpaces $text [expr {[lindex $instanceMatch 1] + 1}]]
+            if {[string index $text $pos] ne "("} {
+                continue
+            }
+            set close [::svvs::sv_parser::matchingParen $text $pos]
+            if {$close < 0} { continue }
+            set after [::svvs::sv_parser::skipSpaces $text [expr {$close + 1}]]
+            if {[string index $text $after] ne ";"} {
+                continue
+            }
+            set mapText [string range $text [expr {$pos + 1}] [expr {$close - 1}]]
+            set ports [::svvs::sv_parser::namedPortMapFromText $mapText]
+            if {[dict size $ports] == 0 && [dict exists $modulePortOrder $type]} {
+                set ports [::svvs::sv_parser::positionalPortMapFromText \
+                    $mapText [dict get $modulePortOrder $type]]
+            }
+            if {[dict size $ports] > 0} {
+                lappend instances [dict create type $type instance $instance ports $ports]
+            }
+            set offset [expr {$close + 1}]
+        }
+    }
+    return $instances
+}
+
+proc ::svvs::sv_parser::connectionHintsFromInstantiations {instances} {
+    set byNet {}
+    set hints {}
+    foreach inst $instances {
+        dict for {port endpoint} [dict get $inst ports] {
+            set net [dict get $endpoint net]
+            if {$net eq ""} { continue }
+            dict lappend byNet $net [dict create \
+                module [dict get $inst type] \
+                instance [dict get $inst instance] \
+                port $port \
+                range [dict get $endpoint range]]
+        }
+    }
+    dict for {net endpoints} $byNet {
+        if {[llength $endpoints] < 2} { continue }
+        foreach a $endpoints {
+            foreach b $endpoints {
+                if {$a eq $b} { continue }
+                lappend hints [dict create \
+                    net $net \
+                    fromModule [dict get $a module] \
+                    fromPort [dict get $a port] \
+                    fromRange [dict get $a range] \
+                    toModule [dict get $b module] \
+                    toPort [dict get $b port] \
+                    toRange [dict get $b range]]
+            }
+        }
+    }
+    return $hints
+}
+
+proc ::svvs::sv_parser::namedPortMapFromText {text} {
+    set ports {}
+    foreach {full port signal} [regexp -all -inline -- \
+            {\.([A-Za-z_][A-Za-z0-9_$]*)\s*\(([^()]*)\)} $text] {
+        set endpoint [::svvs::sv_parser::endpointFromExpression $signal]
+        if {$endpoint ne ""} {
+            dict set ports $port $endpoint
+        }
+    }
+    return $ports
+}
+
+proc ::svvs::sv_parser::positionalPortMapFromText {text portOrder} {
+    set ports {}
+    set index 0
+    foreach raw [::svvs::sv_parser::splitTopLevelCommas $text] {
+        if {$index >= [llength $portOrder]} {
+            break
+        }
+        set endpoint [::svvs::sv_parser::endpointFromExpression $raw]
+        if {$endpoint ne ""} {
+            dict set ports [lindex $portOrder $index] $endpoint
+        }
+        incr index
+    }
+    return $ports
+}
+
+proc ::svvs::sv_parser::splitTopLevelCommas {text} {
+    set result {}
+    set depth 0
+    set inString 0
+    set escaped 0
+    set start 0
+    for {set index 0} {$index < [string length $text]} {incr index} {
+        set char [string index $text $index]
+        if {$inString} {
+            if {$escaped} { set escaped 0; continue }
+            if {$char eq "\\"} { set escaped 1; continue }
+            if {$char eq "\""} { set inString 0 }
+            continue
+        }
+        if {$char eq "\""} { set inString 1; continue }
+        switch -- $char {
+            "(" - "[" - "{" {
+                incr depth
+            }
+            ")" - "]" - "}" {
+                if {$depth > 0} { incr depth -1 }
+            }
+            "," {
+                if {$depth == 0} {
+                    lappend result [string trim [string range $text $start [expr {$index - 1}]]]
+                    set start [expr {$index + 1}]
+                }
+            }
+        }
+    }
+    lappend result [string trim [string range $text $start end]]
+    return $result
+}
+
+proc ::svvs::sv_parser::endpointFromExpression {expr} {
+    set expr [string trim $expr]
+    if {[regexp {^([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\[\s*([0-9]+)(?:\s*:\s*([0-9]+))?\s*\])?$} \
+            $expr -> name left right]} {
+        set range ""
+        if {$left ne ""} {
+            set range $left
+            if {$right ne ""} {
+                set range "$left:$right"
+            }
+        }
+        return [dict create net $name range $range]
+    }
+    return ""
+}
+
+proc ::svvs::sv_parser::skipSpaces {text position} {
+    while {$position < [string length $text] &&
+           [string is space [string index $text $position]]} {
+        incr position
+    }
+    return $position
+}
+
+proc ::svvs::sv_parser::isModuleDeclarationAt {text position} {
+    set before [string range $text [expr {max(0, $position - 8)}] [expr {$position - 1}]]
+    return [regexp -nocase {\mmodule\s+$} $before]
+}
+
 proc ::svvs::sv_parser::matchingParen {text openIndex} {
     set depth 0
     set inString 0
@@ -386,53 +608,211 @@ proc ::svvs::sv_parser::moduleHeader {text moduleName} {
         if {$parameterClose < 0} { return "" }
         set position [expr {$parameterClose + 1}]
     }
+    set declarationEnd [string first ";" $clean $position]
     set portOpen [string first "(" $clean $position]
-    if {$portOpen < 0} { return "" }
+    if {$portOpen < 0 || ($declarationEnd >= 0 && $declarationEnd < $portOpen)} {
+        return ""
+    }
     set portClose [::svvs::sv_parser::matchingParen $clean $portOpen]
     if {$portClose < 0} { return "" }
+    if {$declarationEnd >= 0 && $declarationEnd < $portClose} {
+        return ""
+    }
     return [string range $clean [expr {$portOpen + 1}] [expr {$portClose - 1}]]
 }
 
 proc ::svvs::sv_parser::portsFromModuleText {text moduleName} {
     set ports {}
+    set byName {}
+    set moduleText [::svvs::sv_parser::moduleText [::svvs::sv_parser::stripComments $text] $moduleName]
+    set parameters [::svvs::sv_parser::parametersFromModuleText $moduleText]
     set header [::svvs::sv_parser::moduleHeader $text $moduleName]
-    if {$header eq ""} { return $ports }
 
     # Remove comments before splitting. A comment after a comma otherwise lands
     # in the same chunk as the next ANSI port declaration and hides that port.
     set currentDir ""
     set currentRange ""
-    foreach raw [split $header ","] {
-        set item [string trim $raw]
-        if {$item eq ""} {
-            continue
+    if {$header ne ""} {
+        foreach raw [split $header ","] {
+            set item [string trim $raw]
+            if {$item eq ""} {
+                continue
+            }
+            if {[regexp -nocase {^(input|output|inout)\M\s*(.*)$} $item -> dir declaration]} {
+                set currentDir [string tolower $dir]
+                set ranges [regexp -all -inline {\[[^]]+\]} $declaration]
+                set currentRange [expr {[llength $ranges] ? [lindex $ranges 0] : ""}]
+            } else {
+                if {$currentDir eq ""} { continue }
+                set declaration $item
+                set ranges [regexp -all -inline {\[[^]]+\]} $declaration]
+                if {[llength $ranges]} { set currentRange [lindex $ranges 0] }
+            }
+            regsub {\s*=.*$} $declaration "" declaration
+            if {![regexp {([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\[[^]]+\]\s*)*$} \
+                    [string trim $declaration] -> name]} { continue }
+            set width [::svvs::sv_parser::widthFromRange $currentRange $parameters]
+            set direction [expr {$currentDir eq "inout" ? "input" : $currentDir}]
+            if {![dict exists $byName $name]} {
+                dict set byName $name [dict create name $name direction $direction width $width]
+            }
         }
-        if {[regexp -nocase {^(input|output|inout)\M\s*(.*)$} $item -> dir declaration]} {
-            set currentDir [string tolower $dir]
-            set ranges [regexp -all -inline {\[[^]]+\]} $declaration]
-            set currentRange [expr {[llength $ranges] ? [lindex $ranges 0] : ""}]
-        } else {
-            if {$currentDir eq ""} { continue }
-            set declaration $item
-            set ranges [regexp -all -inline {\[[^]]+\]} $declaration]
-            if {[llength $ranges]} { set currentRange [lindex $ranges 0] }
+    }
+
+    set declarationOrder {}
+    foreach port [::svvs::sv_parser::declarationPortsFromModuleText $text $moduleName $parameters] {
+        dict set byName [dict get $port name] $port
+        lappend declarationOrder [dict get $port name]
+    }
+
+    set order [::svvs::sv_parser::portOrderFromHeader $header]
+    if {[llength $order] == 0} {
+        set order $declarationOrder
+    }
+    foreach name $order {
+        if {[dict exists $byName $name]} {
+            lappend ports [dict get $byName $name]
+            dict unset byName $name
         }
-        regsub {\s*=.*$} $declaration "" declaration
-        if {![regexp {([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\[[^]]+\]\s*)*$} \
-                [string trim $declaration] -> name]} { continue }
-        set width [::svvs::sv_parser::widthFromRange $currentRange]
-        set direction [expr {$currentDir eq "inout" ? "input" : $currentDir}]
-        lappend ports [dict create name $name direction $direction width $width]
+    }
+    foreach name [lsort [dict keys $byName]] {
+        lappend ports [dict get $byName $name]
     }
     return $ports
 }
 
-proc ::svvs::sv_parser::widthFromRange {range} {
+proc ::svvs::sv_parser::portOrderFromHeader {header} {
+    set order {}
+    set currentDir ""
+    foreach raw [split $header ","] {
+        set item [string trim $raw]
+        if {$item eq ""} { continue }
+        regsub -all {\[[^]]+\]} $item " " item
+        regsub -nocase {^(input|output|inout)\M} $item "" item
+        regsub -nocase {\m(wire|reg|logic|signed|unsigned)\M} $item " " item
+        regsub {\s*=.*$} $item "" item
+        if {[regexp {([A-Za-z_][A-Za-z0-9_$]*)\s*$} [string trim $item] -> name] &&
+            [lsearch -exact $order $name] < 0} {
+            lappend order $name
+        }
+    }
+    return $order
+}
+
+proc ::svvs::sv_parser::declarationPortsFromModuleText {text moduleName {parameters {}}} {
+    set ports {}
+    set seen {}
+    set clean [::svvs::sv_parser::stripComments $text]
+    set module [::svvs::sv_parser::moduleText $clean $moduleName]
+    set header [::svvs::sv_parser::moduleHeader $clean $moduleName]
+    if {$header ne ""} {
+        set headerIndex [string first $header $module]
+        if {$headerIndex >= 0} {
+            set module [string range $module [expr {$headerIndex + [string length $header]}] end]
+        }
+    }
+    foreach {full dir declaration} [regexp -all -inline -nocase -- \
+            {\m(input|output|inout)\M\s+([^;]+);} $module] {
+        set direction [expr {[string tolower $dir] eq "inout" ? "input" : [string tolower $dir]}]
+        set range ""
+        if {[regexp {\[[^]]+\]} $declaration range]} {
+            set declaration [string map [list $range " "] $declaration]
+        }
+        regsub -all -nocase {\m(wire|reg|logic|signed|unsigned|tri|wand|wor|supply0|supply1)\M} \
+            $declaration " " declaration
+        set width [::svvs::sv_parser::widthFromRange $range $parameters]
+        foreach rawName [split $declaration ,] {
+            set nameText [string trim $rawName]
+            regsub {\s*=.*$} $nameText "" nameText
+            regsub -all {\[[^]]+\]} $nameText " " nameText
+            if {![regexp {^([A-Za-z_][A-Za-z0-9_$]*)$} [string trim $nameText] -> name]} {
+                continue
+            }
+            if {[dict exists $seen $name]} { continue }
+            dict set seen $name 1
+            lappend ports [dict create name $name direction $direction width $width]
+        }
+    }
+    return $ports
+}
+
+proc ::svvs::sv_parser::parametersFromModuleText {text} {
+    set values {}
+    foreach {full declaration} [regexp -all -inline -nocase -- \
+            {\m(?:localparam|parameter)\M\s+([^;,\)]+)} $text] {
+        regsub -all -nocase {\m(int|integer|logic|reg|wire|signed|unsigned)\M} \
+            $declaration " " declaration
+        regsub -all {\[[^]]+\]} $declaration " " declaration
+        if {![regexp {([A-Za-z_][A-Za-z0-9_$]*)\s*=\s*(.+)$} \
+                [string trim $declaration] -> name expr]} {
+            continue
+        }
+        set expr [string trim $expr]
+        set value [::svvs::sv_parser::evalIntExpression $expr $values]
+        if {$value ne ""} {
+            dict set values $name $value
+        }
+    }
+    return $values
+}
+
+proc ::svvs::sv_parser::clog2 {value} {
+    if {![string is integer -strict $value] || $value <= 1} {
+        return 0
+    }
+    set result 0
+    set power 1
+    while {$power < $value} {
+        set power [expr {$power * 2}]
+        incr result
+    }
+    return $result
+}
+
+proc ::svvs::sv_parser::compareIdentifierLength {a b} {
+    return [expr {[string length $b] - [string length $a]}]
+}
+
+proc ::svvs::sv_parser::evalIntExpression {expression {parameters {}}} {
+    set expr [string trim $expression]
+    regsub -all {\$clog2\s*\(} $expr {clog2(} expr
+    foreach name [lsort -command ::svvs::sv_parser::compareIdentifierLength [dict keys $parameters]] {
+        set escaped [regsub -all {([][(){}.*+?^$\\|])} $name {\\\1}]
+        regsub -all -- "\\m${escaped}\\M" $expr [dict get $parameters $name] expr
+    }
+    regsub -all {_} $expr "" expr
+    regsub -all -nocase {([0-9]+)?'b([01]+)} $expr {0b\2} expr
+    regsub -all -nocase {([0-9]+)?'h([0-9a-f]+)} $expr {0x\2} expr
+    regsub -all -nocase {([0-9]+)?'d([0-9]+)} $expr {\2} expr
+    set checkExpr [regsub -all {\mclog2\M} $expr ""]
+    if {[regexp {[A-Za-z_$]} $checkExpr]} {
+        return ""
+    }
+    if {![regexp {^[0-9xXa-fA-FbBclog2+\-*/%<>=!&|~^?:(). \t]+$} $expr]} {
+        return ""
+    }
+    if {[catch {set value [expr $expr]}]} {
+        return ""
+    }
+    if {![string is integer -strict $value]} {
+        return ""
+    }
+    return $value
+}
+
+proc ::svvs::sv_parser::widthFromRange {range {parameters {}}} {
     if {$range eq ""} {
         return 1
     }
     if {[regexp {\[\s*([0-9]+)\s*:\s*([0-9]+)\s*\]} $range -> left right]} {
         return [expr {abs($left - $right) + 1}]
+    }
+    if {[regexp {\[\s*(.+?)\s*:\s*(.+?)\s*\]} $range -> leftExpr rightExpr]} {
+        set left [::svvs::sv_parser::evalIntExpression $leftExpr $parameters]
+        set right [::svvs::sv_parser::evalIntExpression $rightExpr $parameters]
+        if {$left ne "" && $right ne ""} {
+            return [expr {abs($left - $right) + 1}]
+        }
     }
     return 1
 }

@@ -80,18 +80,42 @@ else
         exit 1
     fi
     chmod 0755 "$TMP_DIR/$MAMBA_NAME"
+    if [ -f "$RUNTIME_DIR/conda-meta/history" ]; then
+        MAMBA_ACTION=install
+    else
+        MAMBA_ACTION=create
+    fi
     MAMBA_ROOT_PREFIX="$APP_DIR/.mamba" \
-        "$TMP_DIR/$MAMBA_NAME" create -y -p "$RUNTIME_DIR" -c conda-forge \
-        tk cxx-compiler
+        "$TMP_DIR/$MAMBA_NAME" "$MAMBA_ACTION" -y -p "$RUNTIME_DIR" \
+        -c conda-forge -c ucb-bar tk cxx-compiler sv2v=v0.0.10
 fi
 
-OSS_URL="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$OSS_TAG/oss-cad-suite-linux-$OSS_ARCH-$OSS_DATE.tgz"
-download "$OSS_URL" "$TMP_DIR/oss-cad-suite.tgz"
-tar -xzf "$TMP_DIR/oss-cad-suite.tgz" -C "$TMP_DIR"
-rm -rf "$TOOLS_DIR/oss-cad-suite"
-mv "$TMP_DIR/oss-cad-suite" "$TOOLS_DIR/oss-cad-suite"
+OSS_READY=0
+if [ -x "$TOOLS_DIR/oss-cad-suite/bin/yosys" ] && \
+        [ -x "$TOOLS_DIR/oss-cad-suite/bin/iverilog" ] && \
+        [ -x "$TOOLS_DIR/oss-cad-suite/bin/tabbypy3" ]; then
+    if "$TOOLS_DIR/oss-cad-suite/bin/yosys" -V >/dev/null 2>&1 && \
+            "$TOOLS_DIR/oss-cad-suite/bin/iverilog" -V >/dev/null 2>&1 && \
+            "$TOOLS_DIR/oss-cad-suite/bin/tabbypy3" --version >/dev/null 2>&1; then
+        OSS_READY=1
+    fi
+fi
+if [ "$OSS_READY" -eq 0 ]; then
+    OSS_URL="https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$OSS_TAG/oss-cad-suite-linux-$OSS_ARCH-$OSS_DATE.tgz"
+    download "$OSS_URL" "$TMP_DIR/oss-cad-suite.tgz"
+    tar -xzf "$TMP_DIR/oss-cad-suite.tgz" -C "$TMP_DIR"
+    rm -rf "$TOOLS_DIR/oss-cad-suite"
+    mv "$TMP_DIR/oss-cad-suite" "$TOOLS_DIR/oss-cad-suite"
+fi
 
-if [ "$OSS_ARCH" = x64 ]; then
+if [ "$INSTALL_MODE" = user ]; then
+    if [ ! -x "$RUNTIME_DIR/bin/sv2v" ]; then
+        echo "The Rocky-compatible sv2v runtime was not installed." >&2
+        exit 1
+    fi
+    mkdir -p "$TOOLS_DIR/sv2v"
+    install -m 0755 "$RUNTIME_DIR/bin/sv2v" "$TOOLS_DIR/sv2v/sv2v"
+elif [ "$OSS_ARCH" = x64 ]; then
     SV2V_URL="https://github.com/zachjs/sv2v/releases/download/v$SV2V_VERSION/sv2v-Linux.zip"
     download "$SV2V_URL" "$TMP_DIR/sv2v.zip"
     PYTHON="$TOOLS_DIR/oss-cad-suite/bin/tabbypy3"
@@ -109,6 +133,17 @@ elif command -v sv2v >/dev/null 2>&1; then
     cp "$(command -v sv2v)" "$TOOLS_DIR/sv2v/sv2v"
 else
     echo "sv2v has no official ARM64 binary. Install sv2v in your account and repeat." >&2
+    exit 1
+fi
+
+if ! "$TOOLS_DIR/sv2v/sv2v" --version >/dev/null 2>&1; then
+    echo "sv2v cannot run on this Linux system. Check its glibc compatibility." >&2
+    exit 1
+fi
+if ! "$TOOLS_DIR/oss-cad-suite/bin/yosys" -V >/dev/null 2>&1 || \
+        ! "$TOOLS_DIR/oss-cad-suite/bin/iverilog" -V >/dev/null 2>&1 || \
+        ! "$TOOLS_DIR/oss-cad-suite/bin/tabbypy3" --version >/dev/null 2>&1; then
+    echo "OSS CAD Suite cannot run on this Linux system." >&2
     exit 1
 fi
 

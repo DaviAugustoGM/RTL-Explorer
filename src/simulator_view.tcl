@@ -25,6 +25,7 @@ namespace eval ::svvs::simulator_view {
     variable simulationStartTime 0
     variable lastSampleTime 0
     variable waveformWindowMs 8000
+    variable waveformsEnabled 1
     array set signalVars {}
     array set valueLabels {}
     array set signalWidths {}
@@ -32,6 +33,20 @@ namespace eval ::svvs::simulator_view {
     array set clockStates {}
     array set clockNext {}
     array set fsmWatches {}
+}
+
+proc ::svvs::simulator_view::toggleWaveforms {} {
+    variable waveformsEnabled
+    set waveformsEnabled [expr {!$waveformsEnabled}]
+    ::svvs::layout::setToolbarActive "Waveforms" $waveformsEnabled
+    if {$waveformsEnabled} {
+        ::svvs::simulator_view::clearWaveformHistory
+        ::svvs::console::log "Waveforms ativadas."
+    } else {
+        ::svvs::simulator_view::clearWaveformHistory
+        ::svvs::console::log "Waveforms desativadas para economizar recursos."
+    }
+    ::svvs::simulator_view::drawWaveforms
 }
 
 proc ::svvs::simulator_view::create {parent} {
@@ -159,6 +174,7 @@ proc ::svvs::simulator_view::renderSignalRows {} {
     variable signalWidths
     variable history
     variable clockSignal
+    variable waveformsEnabled
     array unset signalVars
     array unset valueLabels
     array unset signalWidths
@@ -168,7 +184,7 @@ proc ::svvs::simulator_view::renderSignalRows {} {
     set clockSignal ""
     ::svvs::simulator_view::clearChildren $inputPanel
     ::svvs::simulator_view::clearChildren $outputPanel
-    if {$currentModel ne "" && [dict exists $currentModel traces]} {
+    if {$waveformsEnabled && $currentModel ne "" && [dict exists $currentModel traces]} {
         foreach trace [dict get $currentModel traces] {
             set traceName [dict get $trace name]
             if {![info exists history($traceName)]} { set history($traceName) {} }
@@ -620,6 +636,7 @@ proc ::svvs::simulator_view::updateValues {pairs} {
     variable simulationStartTime
     variable lastSampleTime
     variable fsmWatches
+    variable waveformsEnabled
     set sampleTime [clock milliseconds]
     if {$simulationStartTime == 0} { set simulationStartTime $sampleTime }
     set lastSampleTime $sampleTime
@@ -656,7 +673,7 @@ proc ::svvs::simulator_view::updateValues {pairs} {
             }
             $valueLabels($name) configure -text $display
         }
-        if {[dict exists $traceNames $name]} {
+        if {$waveformsEnabled && [dict exists $traceNames $name]} {
             if {![info exists history($name)]} { set history($name) {} }
             set appendSample 1
             if {[llength $history($name)] > 0 &&
@@ -671,7 +688,9 @@ proc ::svvs::simulator_view::updateValues {pairs} {
         if {[info exists signalVars($name)]} { set signalVars($name) $value }
     }
     ::svvs::diagram_simulation::updateValues $pairs
-    ::svvs::simulator_view::drawWaveforms
+    if {$waveformsEnabled} {
+        ::svvs::simulator_view::drawWaveforms
+    }
 }
 
 proc ::svvs::simulator_view::drawWaveforms {} {
@@ -681,6 +700,7 @@ proc ::svvs::simulator_view::drawWaveforms {} {
     variable simulationStartTime
     variable lastSampleTime
     variable waveformWindowMs
+    variable waveformsEnabled
     if {$waveform eq "" || ![winfo exists $waveform]} { return }
     $waveform delete all
     set width [winfo width $waveform]
@@ -689,6 +709,13 @@ proc ::svvs::simulator_view::drawWaveforms {} {
     if {$height < 20} { set height 150 }
     $waveform create text 14 16 -text "LIVE WAVEFORMS" -anchor w \
         -fill [::svvs::theme::color muted] -font {{Segoe UI} 8 bold}
+    if {!$waveformsEnabled} {
+        $waveform configure -scrollregion [list 0 0 $width $height]
+        $waveform create text 22 55 \
+            -text "Waveform generation disabled." \
+            -anchor w -fill [::svvs::theme::color muted]
+        return
+    }
     if {$currentModel eq ""} { return }
     set outputs [dict get $currentModel traces]
     if {[llength $outputs] == 0} {

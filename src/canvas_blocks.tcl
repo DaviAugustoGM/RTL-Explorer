@@ -429,8 +429,12 @@ proc ::svvs::canvas_blocks::onPress {x y} {
     variable dragLastY
 
     focus .
-    set handleTag [::svvs::canvas_blocks::tagAt $x $y "resize:"]
-    if {$handleTag ne ""} {
+    set hit [::svvs::canvas_blocks::hitAt $x $y]
+    set hitKind [expr {$hit eq "" ? "" : [dict get $hit kind]}]
+    set hitTag [expr {$hit eq "" ? "" : [dict get $hit tag]}]
+
+    if {$hitKind eq "resize"} {
+        set handleTag $hitTag
         set selectedTag $handleTag
         set resizeTag $handleTag
         set dragLastX $x
@@ -440,29 +444,27 @@ proc ::svvs::canvas_blocks::onPress {x y} {
         return
     }
 
-    set portTag [::svvs::canvas_blocks::tagAt $x $y "port:"]
-    if {$portTag ne ""} {
+    if {$hitKind eq "port"} {
+        set portTag $hitTag
         ::svvs::canvas_blocks::selectPort $portTag
         ::svvs::canvas_connections::handlePortClick $portTag
         return
     }
 
-    if {[::svvs::canvas_connections::selectAt $x $y]} {
-        set dragTag ""
-        set resizeTag ""
-        ::svvs::canvas_connections::beginRouteDragAt $selectedTag $x $y
-        return
-    }
-
-    set blockTag [::svvs::canvas_blocks::tagAt $x $y "block:"]
-    if {$blockTag ne ""} {
+    if {$hitKind eq "block"} {
+        set blockTag $hitTag
         set selectedTag $blockTag
         set dragTag $blockTag
         set dragLastX $x
         set dragLastY $y
         ::svvs::canvas_blocks::paintSelection
         ::svvs::canvas_blocks::showBlockProperties $blockTag
+    } elseif {$hitKind eq "connection" && [::svvs::canvas_connections::selectAt $x $y]} {
+        set dragTag ""
+        set resizeTag ""
+        ::svvs::canvas_connections::beginRouteDragAt $selectedTag $x $y
     } else {
+        ::svvs::canvas_connections::cancelPending
         ::svvs::canvas_blocks::clearSelection
         ::svvs::canvas_blocks::panStart $x $y
     }
@@ -772,6 +774,63 @@ proc ::svvs::canvas_blocks::tagAt {x y prefix} {
     return ""
 }
 
+proc ::svvs::canvas_blocks::hitAt {x y} {
+    variable canvas
+    set cx [$canvas canvasx $x]
+    set cy [$canvas canvasy $y]
+    foreach item [lreverse [$canvas find overlapping \
+        [expr {$cx - 7}] [expr {$cy - 7}] [expr {$cx + 7}] [expr {$cy + 7}]]] {
+        set tags [$canvas gettags $item]
+
+        set connTag [::svvs::canvas_blocks::connectionTagFromTags $tags]
+        if {$connTag ne ""} {
+            return [dict create kind connection tag $connTag item $item]
+        }
+
+        if {[lsearch -exact $tags "resize-handle"] >= 0} {
+            set tag [::svvs::canvas_blocks::findTag $tags "resize:"]
+            if {$tag ne ""} {
+                return [dict create kind resize tag $tag item $item]
+            }
+        }
+
+        if {[lsearch -exact $tags "port"] >= 0} {
+            set tag [::svvs::canvas_blocks::findTag $tags "port:"]
+            if {$tag ne ""} {
+                return [dict create kind port tag $tag item $item]
+            }
+        }
+
+        set blockTag [::svvs::canvas_blocks::findTag $tags "block:"]
+        if {$blockTag ne ""} {
+            return [dict create kind block tag $blockTag item $item]
+        }
+    }
+    return ""
+}
+
+proc ::svvs::canvas_blocks::connectionTagFromTags {tags} {
+    set isConnection 0
+    foreach marker {
+        connection connection-hit connection-range-label connection-route-handle
+        simplified-wire simplified-hit simplified-route-handle
+    } {
+        if {[lsearch -exact $tags $marker] >= 0} {
+            set isConnection 1
+            break
+        }
+    }
+    if {!$isConnection} {
+        return ""
+    }
+    foreach tag $tags {
+        if {[string match "conn:*" $tag] || [string match "simple-pair:*" $tag]} {
+            return $tag
+        }
+    }
+    return ""
+}
+
 proc ::svvs::canvas_blocks::findTag {tags prefix} {
     foreach tag $tags {
         if {[string match "$prefix*" $tag]} {
@@ -789,6 +848,23 @@ proc ::svvs::canvas_blocks::moduleForBlockTag {blockTag} {
     variable blocks
     set id [::svvs::canvas_blocks::blockIdFromTag $blockTag]
     return [dict get $blocks($id) module]
+}
+
+proc ::svvs::canvas_blocks::selectedBlockId {} {
+    variable selectedTag
+    if {[regexp {^block:([^:]+)$} $selectedTag -> id] &&
+        [info exists ::svvs::canvas_blocks::blocks($id)]} {
+        return $id
+    }
+    if {[regexp {^resize:([^:]+)$} $selectedTag -> id] &&
+        [info exists ::svvs::canvas_blocks::blocks($id)]} {
+        return $id
+    }
+    if {[regexp {^port:([^:]+):} $selectedTag -> id] &&
+        [info exists ::svvs::canvas_blocks::blocks($id)]} {
+        return $id
+    }
+    return ""
 }
 
 proc ::svvs::canvas_blocks::portInfo {portTag} {

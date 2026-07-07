@@ -110,6 +110,12 @@ proc setupSignalComponentTest {} {
         [dict get $probeModule simulationConfig valueMap]] ne "BUSY"} {
         error "probe value-label editor did not save a hexadecimal mapping"
     }
+    ::svvs::simulation_components::setBase $probe dec
+    set probeModule [dict get $::svvs::canvas_blocks::blocks($probe) module]
+    if {[dict size [dict get $probeModule simulationConfig valueMap]] != 0} {
+        error "changing number format did not clear the probe value map"
+    }
+    ::svvs::simulation_components::setConfig $probe valueMap [dict create 3 READY 4 BUSY]
     ::svvs::simulation_components::setConfig $probe label data_bus
     ::svvs::simulation_components::setConfig $probe nameAssigned 1
 
@@ -128,6 +134,13 @@ proc setupSignalComponentTest {} {
             [dict get [dict get $trace valueMap] 3] eq "READY"} { set mappedTrace 1 }
     }
     if {!$mappedTrace} { error "probe value labels are missing from the waveform model" }
+    set cleared [::svvs::simulation_components::clearAllValueMaps]
+    if {$cleared < 1} { error "global value-map cleanup did not remove any map" }
+    set probeModule [dict get $::svvs::canvas_blocks::blocks($probe) module]
+    if {[dict size [dict get $probeModule simulationConfig valueMap]] != 0} {
+        error "global value-map cleanup left a probe map behind"
+    }
+    ::svvs::simulation_components::setConfig $probe valueMap [dict create 3 READY]
     set savedProbeSize 0
     foreach node [dict get [::svvs::canvas_blocks::exportDiagramData] nodes] {
         if {[dict get $node id] eq $probe && [dict get $node width] == 140 &&
@@ -181,6 +194,15 @@ proc finishSignalComponentTest {} {
     if {![info exists ::svvs::simulator_view::history($::testClockName)] ||
         [llength $::svvs::simulator_view::history($::testClockName)] < 2} {
         error "clock waveform was not sampled in real time"
+    }
+    ::svvs::simulator_view::toggleWaveforms
+    if {$::svvs::simulator_view::waveformsEnabled} {
+        error "waveform toggle did not disable generation"
+    }
+    ::svvs::simulator_view::updateValues [list "$::testClockName=1"]
+    if {[info exists ::svvs::simulator_view::history($::testClockName)] &&
+        [llength $::svvs::simulator_view::history($::testClockName)] != 0} {
+        error "disabled waveforms still collected samples"
     }
     puts "signal component UI test: ok"
     ::svvs::simulator_view::closeProcess

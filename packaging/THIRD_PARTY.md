@@ -8,6 +8,7 @@ The distributable package includes these unmodified tool distributions:
 - w64devkit 2.8.0 on Windows (individual open-source component licenses)
 - micromamba 2.8.1-0 for user-local Linux installation (BSD-3-Clause)
 - Tcl/Tk and C/C++ compiler packages from conda-forge on user-local Linux installations
+- sv2v 0.0.10 from the ucb-bar conda channel on user-local Linux installations
 
 The original license files shipped by OSS CAD Suite, Tcl/Tk and w64devkit remain inside their runtime directories. Release sources:
 
@@ -17,3 +18,4 @@ The original license files shipped by OSS CAD Suite, Tcl/Tk and w64devkit remain
 - https://github.com/skeeto/w64devkit/releases
 - https://github.com/mamba-org/micromamba-releases/releases
 - https://anaconda.org/conda-forge/tk
+- https://anaconda.org/ucb-bar/sv2v

@@ -87,11 +87,23 @@ proc ::svvs::properties_panel::showPort {module port} {
 }
 
 proc ::svvs::properties_panel::showConnection {connection} {
+    set fromRange "full"
+    set toRange "full"
+    if {[dict exists $connection fromRange] && [dict get $connection fromRange] ne ""} {
+        set fromRange [dict get $connection fromRange]
+    }
+    if {[dict exists $connection toRange] && [dict get $connection toRange] ne ""} {
+        set toRange [dict get $connection toRange]
+    }
     ::svvs::properties_panel::setText [join [list \
         "Type: Connection" \
         "Signal: [dict get $connection signal]" \
         "From: [dict get $connection from]" \
         "To: [dict get $connection to]" \
         "Width: [dict get $connection width]" \
+        "Source bits: $fromRange" \
+        "Target bits: $toRange" \
+        "" \
+        "Double-click the connection to edit bit ranges." \
         "Current value: X"] "\n"]
 }

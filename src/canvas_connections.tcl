@@ -9,6 +9,9 @@ namespace eval ::svvs::canvas_connections {
     variable selectedSimplePair ""
     variable simpleDragPair ""
     variable simpleDragField ""
+    variable rangeEditConn ""
+    variable rangeEditFrom ""
+    variable rangeEditTo ""
     array set simplifiedRoutes {}
     variable seq 0
     array set connections {}
@@ -33,7 +36,17 @@ proc ::svvs::canvas_connections::handlePortClick {portTag} {
     set pendingPort ""
 }
 
-proc ::svvs::canvas_connections::drawConnection {from to {width ""}} {
+proc ::svvs::canvas_connections::cancelPending {} {
+    variable pendingPort
+    if {$pendingPort eq ""} {
+        return 0
+    }
+    set pendingPort ""
+    ::svvs::console::log "Conexao cancelada."
+    return 1
+}
+
+proc ::svvs::canvas_connections::drawConnection {from to {width ""} {fromRange ""} {toRange ""}} {
     variable connections
     variable seq
     set canvas $::svvs::canvas_blocks::canvas
@@ -58,10 +71,13 @@ proc ::svvs::canvas_connections::drawConnection {from to {width ""}} {
     }
 
     set id "conn:[incr seq]"
-    return [::svvs::canvas_connections::drawConnectionWithId $id $fromTag $toTag $width]
+    return [::svvs::canvas_connections::drawConnectionWithId \
+        $id $fromTag $toTag $width "" "" "" $fromRange $toRange]
 }
 
-proc ::svvs::canvas_connections::drawConnectionWithId {id fromTag toTag width {routeX1 ""} {routeY ""} {routeX2 ""}} {
+proc ::svvs::canvas_connections::drawConnectionWithId {
+    id fromTag toTag width {routeX1 ""} {routeY ""} {routeX2 ""} {fromRange ""} {toRange ""}
+} {
     variable connections
     variable seq
     set canvas $::svvs::canvas_blocks::canvas
@@ -93,12 +109,19 @@ proc ::svvs::canvas_connections::drawConnectionWithId {id fromTag toTag width {r
             -state hidden \
             -tags [list $id connection-route-handle "route-handle:$handle"]
     }
+    $canvas create text 0 0 \
+        -text "" \
+        -fill [::svvs::theme::color accent] \
+        -font {{Cascadia Mono} 8 bold} \
+        -state hidden \
+        -tags [list $id connection-range-label]
     $canvas lower $hitId
 
     set signal [::svvs::canvas_connections::signalName $fromTag]
     set connections($id) [dict create \
         id $id from $fromTag to $toTag signal $signal width $width \
-        routeX1 $routeX1 routeY $routeY routeX2 $routeX2]
+        routeX1 $routeX1 routeY $routeY routeX2 $routeX2 \
+        fromRange $fromRange toRange $toRange]
     ::svvs::simulation_components::assignConnectionNames $fromTag $toTag
     ::svvs::canvas_connections::updateGeometry $id
     ::svvs::canvas_connections::refreshDisplay
@@ -131,17 +154,11 @@ proc ::svvs::canvas_connections::autoConnect {} {
         return 0
     }
 
+    set created [::svvs::canvas_connections::autoConnectFromSources $outputs $inputs]
     set occupiedInputs {}
     set existingPairs {}
-    foreach id [array names connections] {
-        set conn $connections($id)
-        set from [dict get $conn from]
-        set to [dict get $conn to]
-        dict set occupiedInputs $to 1
-        dict set existingPairs "$from|$to" 1
-    }
+    ::svvs::canvas_connections::connectionOccupancy occupiedInputs existingPairs
 
-    set created 0
     foreach inputTag $inputs {
         if {[dict exists $occupiedInputs $inputTag]} {
             continue
@@ -195,6 +212,160 @@ proc ::svvs::canvas_connections::autoConnect {} {
         ::svvs::console::log "Conexao automatica concluida: $created conexao(oes) criada(s)." ok
     }
     return $created
+}
+
+proc ::svvs::canvas_connections::connectionOccupancy {occupiedVar pairsVar} {
+    variable connections
+    upvar 1 $occupiedVar occupiedInputs
+    upvar 1 $pairsVar existingPairs
+    set occupiedInputs {}
+    set existingPairs {}
+    foreach id [array names connections] {
+        set conn $connections($id)
+        set from [dict get $conn from]
+        set to [dict get $conn to]
+        dict set occupiedInputs $to 1
+        dict set existingPairs "$from|$to" 1
+    }
+}
+
+proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
+    if {![info exists ::svvs::project_tree::projectFiles] ||
+        [llength $::svvs::project_tree::projectFiles] == 0} {
+        return 0
+    }
+
+    set moduleNames {}
+    foreach tag [concat $outputs $inputs] {
+        set info [::svvs::canvas_blocks::portInfo $tag]
+        set moduleName [dict get [dict get $info module] name]
+        if {[lsearch -exact $moduleNames $moduleName] < 0} {
+            lappend moduleNames $moduleName
+        }
+    }
+    set hints [::svvs::sv_parser::structuralConnectionsFromFiles \
+        $::svvs::project_tree::projectFiles $moduleNames]
+    if {[llength $hints] == 0} {
+        return 0
+    }
+
+    set occupiedInputs {}
+    set existingPairs {}
+    ::svvs::canvas_connections::connectionOccupancy occupiedInputs existingPairs
+    set created 0
+    set attempted {}
+    foreach hint $hints {
+        foreach order {
+            {fromModule fromPort toModule toPort}
+            {toModule toPort fromModule fromPort}
+        } {
+            lassign $order sourceModuleKey sourcePortKey targetModuleKey targetPortKey
+            set fromTag [::svvs::canvas_connections::uniquePortTag \
+                $outputs [dict get $hint $sourceModuleKey] [dict get $hint $sourcePortKey]]
+            set toTag [::svvs::canvas_connections::uniquePortTag \
+                $inputs [dict get $hint $targetModuleKey] [dict get $hint $targetPortKey]]
+            if {$fromTag eq "" || $toTag eq ""} {
+                continue
+            }
+            if {[dict exists $attempted "$fromTag|$toTag"] ||
+                [dict exists $existingPairs "$fromTag|$toTag"] ||
+                [dict exists $occupiedInputs $toTag]} {
+                continue
+            }
+            set fromPort $::svvs::canvas_blocks::tagToPort($fromTag)
+            set toPort $::svvs::canvas_blocks::tagToPort($toTag)
+            set rangeInfo [::svvs::canvas_connections::rangesForStructuralHint \
+                $hint $sourceModuleKey $targetModuleKey $fromPort $toPort]
+            if {$rangeInfo eq ""} {
+                continue
+            }
+            set connWidth [dict get $rangeInfo width]
+            set fromRange [dict get $rangeInfo fromRange]
+            set toRange [dict get $rangeInfo toRange]
+            dict set attempted "$fromTag|$toTag" 1
+            if {[::svvs::canvas_connections::drawConnection \
+                    $fromTag $toTag $connWidth $fromRange $toRange] ne ""} {
+                dict set occupiedInputs $toTag 1
+                dict set existingPairs "$fromTag|$toTag" 1
+                incr created
+            }
+        }
+    }
+    if {$created > 0} {
+        ::svvs::console::log \
+            "Conexao automatica: $created conexao(oes) criada(s) usando instancias do Verilog." ok
+    }
+    return $created
+}
+
+proc ::svvs::canvas_connections::rangesForStructuralHint {hint sourceModuleKey targetModuleKey fromPort toPort} {
+    set fromWidth [dict get $fromPort width]
+    set toWidth [dict get $toPort width]
+    set sourceRangeKey [expr {$sourceModuleKey eq "fromModule" ? "fromRange" : "toRange"}]
+    set targetRangeKey [expr {$targetModuleKey eq "toModule" ? "toRange" : "fromRange"}]
+    set sourceNetRange [expr {[dict exists $hint $sourceRangeKey] ? [dict get $hint $sourceRangeKey] : ""}]
+    set targetNetRange [expr {[dict exists $hint $targetRangeKey] ? [dict get $hint $targetRangeKey] : ""}]
+    set sourceRangeWidth [::svvs::canvas_connections::rangeWidth $sourceNetRange]
+    set targetRangeWidth [::svvs::canvas_connections::rangeWidth $targetNetRange]
+
+    set connWidth $toWidth
+    if {$targetRangeWidth ne ""} {
+        set connWidth $targetRangeWidth
+    } elseif {$sourceRangeWidth ne ""} {
+        set connWidth $sourceRangeWidth
+    } elseif {$fromWidth == $toWidth} {
+        set connWidth $toWidth
+    } else {
+        return ""
+    }
+
+    set fromRange ""
+    set toRange ""
+    if {$fromWidth != $connWidth} {
+        if {$targetNetRange ne ""} {
+            set fromRange $targetNetRange
+        } elseif {$sourceNetRange ne ""} {
+            set fromRange $sourceNetRange
+        } else {
+            return ""
+        }
+    }
+    if {$toWidth != $connWidth} {
+        if {$sourceNetRange ne ""} {
+            set toRange $sourceNetRange
+        } elseif {$targetNetRange ne ""} {
+            set toRange $targetNetRange
+        } else {
+            return ""
+        }
+    }
+    return [dict create width $connWidth fromRange $fromRange toRange $toRange]
+}
+
+proc ::svvs::canvas_connections::rangeWidth {range} {
+    if {$range eq ""} { return "" }
+    if {![regexp {^\s*([0-9]+)(?:\s*:\s*([0-9]+))?\s*$} $range -> left right]} {
+        return ""
+    }
+    if {$right eq ""} { set right $left }
+    return [expr {abs($left - $right) + 1}]
+}
+
+proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName} {
+    set matches {}
+    foreach tag $candidates {
+        set info [::svvs::canvas_blocks::portInfo $tag]
+        set module [dict get $info module]
+        set port [dict get $info port]
+        if {[string equal -nocase [dict get $module name] $moduleName] &&
+            [string equal -nocase [dict get $port name] $portName]} {
+            lappend matches $tag
+        }
+    }
+    if {[llength $matches] == 1} {
+        return [lindex $matches 0]
+    }
+    return ""
 }
 
 proc ::svvs::canvas_connections::portIsLive {portTag} {
@@ -291,6 +462,8 @@ proc ::svvs::canvas_connections::updateGeometry {id} {
         source [list [lindex $coords 2] [expr {([lindex $coords 3] + [lindex $coords 5]) / 2.0}]] \
         middle [list [expr {([lindex $coords 4] + [lindex $coords 6]) / 2.0}] [lindex $coords 5]] \
         target [list [lindex $coords 6] [expr {([lindex $coords 7] + [lindex $coords 9]) / 2.0}]]]
+    set labelCenter [dict get $handleCenters middle]
+    set rangeLabel [::svvs::canvas_connections::rangeLabel $conn]
 
     foreach item [$canvas find withtag $id] {
         set tags [$canvas gettags $item]
@@ -303,6 +476,11 @@ proc ::svvs::canvas_connections::updateGeometry {id} {
             $canvas coords $item \
                 [expr {$midX - 5}] [expr {$midY - 5}] \
                 [expr {$midX + 5}] [expr {$midY + 5}]
+        } elseif {[lsearch -exact $tags "connection-range-label"] >= 0} {
+            $canvas coords $item [lindex $labelCenter 0] [expr {[lindex $labelCenter 1] - 12}]
+            $canvas itemconfigure $item \
+                -text $rangeLabel \
+                -state [expr {$rangeLabel eq "" ? "hidden" : "normal"}]
         } else {
             $canvas coords $item {*}$coords
         }
@@ -310,6 +488,17 @@ proc ::svvs::canvas_connections::updateGeometry {id} {
             $canvas lower $item
         }
     }
+}
+
+proc ::svvs::canvas_connections::rangeLabel {conn} {
+    set fromRange [::svvs::canvas_connections::connectionField $conn fromRange]
+    set toRange [::svvs::canvas_connections::connectionField $conn toRange]
+    if {$fromRange ne "" && $toRange ne "" && $fromRange ne $toRange} {
+        return "$fromRange -> $toRange"
+    }
+    if {$fromRange ne ""} { return $fromRange }
+    if {$toRange ne ""} { return $toRange }
+    return ""
 }
 
 proc ::svvs::canvas_connections::refreshAll {} {
@@ -1002,6 +1191,7 @@ proc ::svvs::canvas_connections::itemAt {x y} {
         set tags [$canvas gettags $item]
         if {[lsearch -exact $tags "connection"] >= 0 ||
             [lsearch -exact $tags "connection-hit"] >= 0 ||
+            [lsearch -exact $tags "connection-range-label"] >= 0 ||
             [lsearch -exact $tags "connection-route-handle"] >= 0 ||
             [lsearch -exact $tags "simplified-wire"] >= 0 ||
             [lsearch -exact $tags "simplified-hit"] >= 0 ||
@@ -1095,7 +1285,9 @@ proc ::svvs::canvas_connections::select {connTag} {
         signal [dict get $connections($connTag) signal] \
         from [::svvs::canvas_connections::portLabel [dict get $connections($connTag) from]] \
         to [::svvs::canvas_connections::portLabel [dict get $connections($connTag) to]] \
-        width [dict get $connections($connTag) width]]
+        width [dict get $connections($connTag) width] \
+        fromRange [::svvs::canvas_connections::connectionField $connections($connTag) fromRange] \
+        toRange [::svvs::canvas_connections::connectionField $connections($connTag) toRange]]
     foreach item [$canvas find withtag $connTag] {
         set tags [$canvas gettags $item]
         if {[lsearch -exact $tags "connection"] >= 0} {
@@ -1111,6 +1303,107 @@ proc ::svvs::canvas_connections::select {connTag} {
         }
     }
     ::svvs::console::log "Conexao selecionada."
+}
+
+proc ::svvs::canvas_connections::connectionField {conn key} {
+    if {[dict exists $conn $key]} {
+        return [dict get $conn $key]
+    }
+    return ""
+}
+
+proc ::svvs::canvas_connections::editAt {x y} {
+    variable connections
+    set canvas $::svvs::canvas_blocks::canvas
+    set item [::svvs::canvas_connections::itemAt $x $y]
+    if {$item eq ""} { return 0 }
+    foreach tag [$canvas gettags $item] {
+        if {[string match "conn:*" $tag] && [info exists connections($tag)]} {
+            ::svvs::canvas_connections::select $tag
+            ::svvs::canvas_connections::rangeDialog $tag
+            return 1
+        }
+    }
+    return 0
+}
+
+proc ::svvs::canvas_connections::rangeDialog {connTag} {
+    variable connections
+    variable rangeEditConn
+    variable rangeEditFrom
+    variable rangeEditTo
+    if {![info exists connections($connTag)]} { return }
+    set rangeEditConn $connTag
+    set rangeEditFrom [::svvs::canvas_connections::connectionField $connections($connTag) fromRange]
+    set rangeEditTo [::svvs::canvas_connections::connectionField $connections($connTag) toRange]
+    catch {destroy .connectionRangeEditor}
+    toplevel .connectionRangeEditor
+    wm title .connectionRangeEditor "Connection bit range"
+    wm transient .connectionRangeEditor .
+    wm resizable .connectionRangeEditor 0 0
+    ttk::label .connectionRangeEditor.help \
+        -text "Leave empty to use the full port. Use forms like 7:0 or 15."
+    ttk::label .connectionRangeEditor.fromLabel -text "Source bits"
+    ttk::entry .connectionRangeEditor.from -width 18 \
+        -textvariable ::svvs::canvas_connections::rangeEditFrom
+    ttk::label .connectionRangeEditor.toLabel -text "Target bits"
+    ttk::entry .connectionRangeEditor.to -width 18 \
+        -textvariable ::svvs::canvas_connections::rangeEditTo
+    ttk::button .connectionRangeEditor.apply -text "Apply" \
+        -command ::svvs::canvas_connections::commitRangeDialog
+    ttk::button .connectionRangeEditor.clear -text "Use full ports" \
+        -command ::svvs::canvas_connections::clearRangeDialog
+    grid .connectionRangeEditor.help -row 0 -column 0 -columnspan 2 -sticky w -padx 14 -pady {14 8}
+    grid .connectionRangeEditor.fromLabel -row 1 -column 0 -sticky w -padx 14 -pady 4
+    grid .connectionRangeEditor.from -row 1 -column 1 -sticky ew -padx {0 14} -pady 4
+    grid .connectionRangeEditor.toLabel -row 2 -column 0 -sticky w -padx 14 -pady 4
+    grid .connectionRangeEditor.to -row 2 -column 1 -sticky ew -padx {0 14} -pady 4
+    grid .connectionRangeEditor.clear -row 3 -column 0 -padx 14 -pady {10 14}
+    grid .connectionRangeEditor.apply -row 3 -column 1 -padx {0 14} -pady {10 14}
+    bind .connectionRangeEditor.from <Return> ::svvs::canvas_connections::commitRangeDialog
+    bind .connectionRangeEditor.to <Return> ::svvs::canvas_connections::commitRangeDialog
+    focus .connectionRangeEditor.from
+}
+
+proc ::svvs::canvas_connections::clearRangeDialog {} {
+    variable rangeEditFrom
+    variable rangeEditTo
+    set rangeEditFrom ""
+    set rangeEditTo ""
+    ::svvs::canvas_connections::commitRangeDialog
+}
+
+proc ::svvs::canvas_connections::commitRangeDialog {} {
+    variable connections
+    variable rangeEditConn
+    variable rangeEditFrom
+    variable rangeEditTo
+    if {![info exists connections($rangeEditConn)]} { return }
+    foreach value [list $rangeEditFrom $rangeEditTo] {
+        if {$value ne "" && [::svvs::canvas_connections::rangeWidth $value] eq ""} {
+            ::svvs::console::log "Faixa invalida. Use 7:0, 15:8 ou um unico bit." warn
+            return
+        }
+    }
+    dict set connections($rangeEditConn) fromRange [string trim $rangeEditFrom]
+    dict set connections($rangeEditConn) toRange [string trim $rangeEditTo]
+    set width [::svvs::canvas_connections::effectiveConnectionWidth $connections($rangeEditConn)]
+    dict set connections($rangeEditConn) width $width
+    ::svvs::canvas_connections::select $rangeEditConn
+    ::svvs::canvas_connections::paintSelection $rangeEditConn
+    if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
+    catch {destroy .connectionRangeEditor}
+    ::svvs::console::log "Faixa de bits da conexao atualizada."
+}
+
+proc ::svvs::canvas_connections::effectiveConnectionWidth {conn} {
+    set fromRange [::svvs::canvas_connections::connectionField $conn fromRange]
+    set toRange [::svvs::canvas_connections::connectionField $conn toRange]
+    foreach range [list $fromRange $toRange] {
+        set width [::svvs::canvas_connections::rangeWidth $range]
+        if {$width ne ""} { return $width }
+    }
+    return [dict get $conn width]
 }
 
 proc ::svvs::canvas_connections::paintSelection {{selected ""}} {
@@ -1137,6 +1430,8 @@ proc ::svvs::canvas_connections::paintSelection {{selected ""}} {
             set tags [$canvas gettags $item]
             if {[lsearch -exact $tags "connection"] >= 0} {
                 $canvas itemconfigure $item -fill $color -width $drawWidth
+            } elseif {[lsearch -exact $tags "connection-range-label"] >= 0} {
+                $canvas itemconfigure $item -fill $color
             } elseif {[lsearch -exact $tags "connection-route-handle"] >= 0} {
                 $canvas itemconfigure $item -state [expr {!$simplifiedMode && $id eq $selected ? "normal" : "hidden"}]
                 if {!$simplifiedMode && $id eq $selected} {
@@ -1261,7 +1556,9 @@ proc ::svvs::canvas_connections::exportConnectionData {} {
             width [dict get $conn width] \
             routeX1 [dict get $conn routeX1] \
             routeY [dict get $conn routeY] \
-            routeX2 [dict get $conn routeX2]]
+            routeX2 [dict get $conn routeX2] \
+            fromRange [::svvs::canvas_connections::connectionField $conn fromRange] \
+            toRange [::svvs::canvas_connections::connectionField $conn toRange]]
     }
     return $exported
 }
@@ -1299,8 +1596,13 @@ proc ::svvs::canvas_connections::importConnectionData {items} {
             set routeX1 [dict get $conn routeX]
             set routeX2 [dict get $conn routeX]
         }
+        set fromRange ""
+        set toRange ""
+        if {[dict exists $conn fromRange]} { set fromRange [dict get $conn fromRange] }
+        if {[dict exists $conn toRange]} { set toRange [dict get $conn toRange] }
         if {[info exists ::svvs::canvas_blocks::tagToPort($from)] && [info exists ::svvs::canvas_blocks::tagToPort($to)]} {
-            ::svvs::canvas_connections::drawConnectionWithId $id $from $to $width $routeX1 $routeY $routeX2
+            ::svvs::canvas_connections::drawConnectionWithId \
+                $id $from $to $width $routeX1 $routeY $routeX2 $fromRange $toRange
             if {[dict exists $conn signal]} {
                 dict set connections($id) signal [dict get $conn signal]
             }

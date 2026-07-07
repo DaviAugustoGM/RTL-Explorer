@@ -43,13 +43,14 @@ proc ::svvs::layout::createTopbar {parent} {
 
     foreach item {
         {"File" {::svvs::layout::showFileMenu %W}}
-        {"Auto Connect" {::svvs::canvas_connections::autoConnect}}
+        {"Auto Connect" {::svvs::layout::showAutoConnectMenu %W}}
         {"Run" {::svvs::simulator_view::run}}
         {"Build and Run" {::svvs::simulator_view::buildAndRun}}
         {"Pause" {::svvs::simulator_view::pause}}
         {"Stop" {::svvs::simulator_view::stop}}
         {"Names" {::svvs::canvas_blocks::togglePortNames}}
         {"Simple Wires" {::svvs::canvas_connections::toggleSimplified}}
+        {"Waveforms" {::svvs::simulator_view::toggleWaveforms}}
     } {
         set text [lindex $item 0]
         set command [lindex $item 1]
@@ -76,6 +77,7 @@ proc ::svvs::layout::createTopbar {parent} {
         -borderwidth 0
     pack $parent.topbarDivider -side top -fill x
     ::svvs::layout::setToolbarActive "Names" 1
+    ::svvs::layout::setToolbarActive "Waveforms" $::svvs::simulator_view::waveformsEnabled
 }
 
 proc ::svvs::layout::restoreToolbarWidget {widget} {
@@ -117,6 +119,19 @@ proc ::svvs::layout::showFileMenu {widget} {
     .fileMenu add command -label "Open Folder" -command {::svvs::layout::openFolder}
     .fileMenu add separator
     .fileMenu add command -label "Save Project" -command {::svvs::layout::saveProject}
+    menu .fileMenu.valueMaps -tearoff 0 \
+        -background [::svvs::theme::color panel] \
+        -foreground [::svvs::theme::color text] \
+        -activebackground [::svvs::theme::color selected] \
+        -activeforeground white
+    .fileMenu.valueMaps add command -label "Import Signal Value Maps..." \
+        -command {::svvs::simulation_components::importValueMapsDialog}
+    .fileMenu.valueMaps add command -label "Export Signal Value Maps..." \
+        -command {::svvs::simulation_components::exportValueMapsDialog}
+    .fileMenu.valueMaps add separator
+    .fileMenu.valueMaps add command -label "Clear Signal Value Maps" \
+        -command {::svvs::simulation_components::clearAllValueMaps}
+    .fileMenu add cascade -label "Signal Value Maps" -menu .fileMenu.valueMaps
     menu .fileMenu.exportPdf -tearoff 0 \
         -background [::svvs::theme::color panel] \
         -foreground [::svvs::theme::color text] \
@@ -134,29 +149,59 @@ proc ::svvs::layout::showFileMenu {widget} {
     tk_popup .fileMenu $x $y
 }
 
+proc ::svvs::layout::showAutoConnectMenu {widget} {
+    if {[winfo exists .autoConnectMenu]} {
+        destroy .autoConnectMenu
+    }
+
+    menu .autoConnectMenu \
+        -tearoff 0 \
+        -background [::svvs::theme::color panel] \
+        -foreground [::svvs::theme::color text] \
+        -activebackground [::svvs::theme::color selected] \
+        -activeforeground white \
+        -borderwidth 1 \
+        -activeborderwidth 0 \
+        -font {{Segoe UI} 9}
+    .autoConnectMenu add command -label "Connect matching ports" \
+        -command {::svvs::canvas_connections::autoConnect}
+    .autoConnectMenu add separator
+    .autoConnectMenu add command -label "Create input blocks for selected module" \
+        -command {::svvs::simulation_components::autoIoForSelected inputs}
+    .autoConnectMenu add command -label "Create output probes for selected module" \
+        -command {::svvs::simulation_components::autoIoForSelected outputs}
+    .autoConnectMenu add command -label "Create inputs and outputs for selected module" \
+        -command {::svvs::simulation_components::autoIoForSelected both}
+
+    set x [winfo rootx $widget]
+    set y [expr {[winfo rooty $widget] + [winfo height $widget]}]
+    tk_popup .autoConnectMenu $x $y
+}
+
 proc ::svvs::layout::openFolder {} {
-    set dir [tk_chooseDirectory -title "Open SystemVerilog folder"]
+    set dir [tk_chooseDirectory -title "Open Verilog/SystemVerilog folder"]
     if {$dir eq ""} {
         return
     }
 
     set files [::svvs::layout::findSystemVerilogFiles $dir]
     if {[llength $files] == 0} {
-        ::svvs::console::log "Nenhum arquivo .sv encontrado em: $dir" warn
+        ::svvs::console::log "Nenhum arquivo Verilog/SystemVerilog encontrado em: $dir" warn
         return
     }
 
     ::svvs::simulator_view::clearBuildCache
     ::svvs::project_tree::loadProjectFiles $files [file tail $dir]
     ::svvs::console::log "Pasta carregada: $dir"
-    ::svvs::console::log "Arquivos .sv encontrados: [llength $files]" ok
+    ::svvs::console::log "Arquivos Verilog/SystemVerilog encontrados: [llength $files]" ok
 }
 
 proc ::svvs::layout::openFiles {} {
     set files [tk_getOpenFile \
-        -title "Open SystemVerilog files" \
+        -title "Open Verilog/SystemVerilog files" \
         -multiple 1 \
         -filetypes {
+            {"Verilog/SystemVerilog files" {.sv .svh .v .vh}}
             {"SystemVerilog files" {.sv .svh}}
             {"Verilog files" {.v .vh}}
             {"All files" {*}}
@@ -233,7 +278,7 @@ proc ::svvs::layout::openProjectFrom {path} {
 
 proc ::svvs::layout::findSystemVerilogFiles {dir} {
     set found {}
-    foreach pattern {*.sv *.svh} {
+    foreach pattern {*.sv *.svh *.v *.vh} {
         foreach file [glob -nocomplain -directory $dir -types f $pattern] {
             lappend found [file normalize $file]
         }

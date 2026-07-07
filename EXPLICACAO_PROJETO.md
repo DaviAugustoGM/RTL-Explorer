@@ -8,7 +8,7 @@ O RTL Explorer e uma interface grafica feita em Tcl/Tk para visualizar modulos S
 
 Hoje ele ja consegue:
 
-- abrir arquivos `.sv` ou uma pasta com arquivos `.sv`;
+- abrir arquivos `.sv`, `.svh`, `.v` e `.vh` ou uma pasta com esses arquivos;
 - detectar modulos e portas simples;
 - mostrar uma arvore do projeto;
 - mostrar uma biblioteca de blocos;
@@ -17,6 +17,8 @@ Hoje ele ja consegue:
 - mover e redimensionar blocos;
 - salvar o projeto em `.rtlex`;
 - abrir um projeto `.rtlex` salvo.
+- criar automaticamente blocos `input_signal` e `output_probe` para o modulo selecionado;
+- importar e exportar mapas de valores para entradas e saidas.
 
 ## Como iniciar
 
@@ -207,13 +209,28 @@ A arvore pode mostrar duas coisas:
 1. O projeto aberto.
 2. A biblioteca de blocos, no modo Blocos.
 
-Quando abre uma pasta com `.sv`, o projeto chama:
+Quando abre uma pasta com Verilog/SystemVerilog, o projeto chama:
 
 ```tcl
 ::svvs::project_tree::loadProjectFiles
 ```
 
 Essa funcao salva os arquivos abertos e chama o parser para detectar modulos.
+
+O parser aceita dois estilos comuns de porta:
+
+```verilog
+module modern(input logic clk, output logic [7:0] data);
+endmodule
+
+module legacy(clk, data);
+  input clk;
+  output [7:0] data;
+endmodule
+```
+
+O primeiro estilo e comum em SystemVerilog. O segundo aparece bastante em
+codigo Verilog antigo.
 
 No modo Blocos, a arvore mostra:
 
@@ -613,12 +630,42 @@ SystemVerilog. Arraste a alca para alterar livremente largura e altura. O valor
 ou texto central se ajusta ao espaco disponivel, as conexoes acompanham o novo
 tamanho e as dimensoes sao preservadas no projeto `.rtlex`.
 
-No menu de contexto de `output_probe`, **Value labels...** cria nomes para
-valores numericos. O campo **Value** aceita binario com prefixo `0b`, hexadecimal
-com `0x` ou decimal sem prefixo. Por exemplo, `0b00 = IDLE`, `0x1 = READ` e
-`2 = WRITE`. Durante a simulacao, o texto aparece no bloco, na lista de saidas e
-na waveform. Valores sem mapeamento continuam usando o formato numerico
-selecionado. O mapa acompanha o bloco quando o projeto `.rtlex` e salvo.
+No menu de contexto de `input_signal` e `output_probe`, **Value labels...** cria
+nomes para valores numericos. O campo **Value** aceita binario com prefixo `0b`,
+hexadecimal com `0x` ou decimal sem prefixo. Por exemplo, `0b00 = IDLE`,
+`0x1 = READ` e `2 = WRITE`. Durante a simulacao, o texto aparece no bloco, na
+lista de saidas e na waveform. Valores sem mapeamento continuam usando o formato
+numerico selecionado. O mapa acompanha o bloco quando o projeto `.rtlex` e salvo.
+
+Tambem e possivel usar **File > Signal Value Maps** ou o menu de contexto do
+bloco para importar/exportar mapas em `.txt`, `.map` ou `.py` tratado como texto.
+O formato recomendado e:
+
+```text
+[addr]
+0 = Primeiro endereco
+0x3 = Quarto endereco
+
+[state]
+0b00 = IDLE
+0b01 = READ
+0b10 = WRITE
+```
+
+O nome entre colchetes deve ser o rotulo do bloco de sinal. Como os blocos de
+entrada e saida recebem automaticamente o nome da primeira porta conectada, esse
+arquivo costuma funcionar em outros projetos quando as portas tem os mesmos
+nomes.
+
+Para remover mapas importados, use **File > Signal Value Maps > Clear Signal
+Value Maps** para limpar todos os blocos, ou clique com o botao direito em um
+`input_signal`/`output_probe` e escolha **Clear value labels**. Se voce mudar o
+formato do bloco para binario, decimal ou hexadecimal, o mapa daquele bloco e
+removido automaticamente para que ele volte a mostrar o numero puro.
+
+O menu **Auto Connect** possui uma opcao para conexoes entre portas de mesmo nome
+e opcoes para criar automaticamente blocos de entrada, saida ou ambos para o
+modulo selecionado no diagrama.
 
 O painel **Live Waveforms** fica permanentemente entre a area de trabalho e o
 console. As duas divisorias podem ser arrastadas para ajustar a altura do
