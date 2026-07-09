@@ -1,5 +1,6 @@
 namespace eval ::svvs::theme {
     variable colors
+    variable uiScale 1.0
     array set colors {
         bg #181a1e
         panel #22252a
@@ -23,6 +24,68 @@ namespace eval ::svvs::theme {
     }
 }
 
+proc ::svvs::theme::configureScale {root} {
+    variable uiScale
+
+    set screenW [winfo screenwidth $root]
+    set screenH [winfo screenheight $root]
+    set scale [expr {min($screenW / 1600.0, $screenH / 900.0)}]
+    if {$scale < 1.0} { set scale 1.0 }
+    if {$scale > 1.6} { set scale 1.6 }
+
+    if {[catch {
+        set mmW [winfo screenmmwidth $root]
+        if {$mmW > 0} {
+            set dpi [expr {25.4 * $screenW / double($mmW)}]
+            if {$dpi > 110} {
+                set dpiScale [expr {min(1.35, $dpi / 96.0)}]
+                if {$dpiScale > $scale} { set scale $dpiScale }
+            }
+        }
+    }]} {
+        # Some remote/X11 setups do not report physical screen size reliably.
+    }
+
+    set uiScale [expr {min(1.75, max(1.0, $scale))}]
+    return $uiScale
+}
+
+proc ::svvs::theme::scaleFactor {} {
+    variable uiScale
+    return $uiScale
+}
+
+proc ::svvs::theme::scale {value} {
+    variable uiScale
+    return [expr {int(round($value * $uiScale))}]
+}
+
+proc ::svvs::theme::scaleList {values} {
+    set scaled {}
+    foreach value $values {
+        lappend scaled [::svvs::theme::scale $value]
+    }
+    return $scaled
+}
+
+proc ::svvs::theme::font {family size {weight ""}} {
+    set result [list $family [::svvs::theme::scale $size]]
+    if {$weight ne ""} {
+        lappend result $weight
+    }
+    return $result
+}
+
+proc ::svvs::theme::initialGeometry {root} {
+    set screenW [winfo screenwidth $root]
+    set screenH [winfo screenheight $root]
+    set width [::svvs::theme::scale 1280]
+    set height [::svvs::theme::scale 820]
+    set width [expr {min($width, int($screenW * 0.92))}]
+    set height [expr {min($height, int($screenH * 0.88))}]
+    return "${width}x${height}"
+}
+
 proc ::svvs::theme::color {name} {
     variable colors
     return $colors($name)
@@ -34,7 +97,7 @@ proc ::svvs::theme::apply {root} {
     ttk::style theme use clam
     $root configure -background $colors(bg)
 
-    option add *Font {{Segoe UI} 9}
+    option add *Font [::svvs::theme::font "Segoe UI" 9]
     option add *Foreground $colors(text)
     option add *Background $colors(bg)
     option add *insertBackground $colors(text)
@@ -57,18 +120,19 @@ proc ::svvs::theme::apply {root} {
     ttk::style configure Panel.TLabel -background $colors(panel) -foreground $colors(text)
     ttk::style configure Muted.Panel.TLabel \
         -background $colors(panel) -foreground $colors(muted) \
-        -font {{Segoe UI} 9}
+        -font [::svvs::theme::font "Segoe UI" 9]
     ttk::style configure Section.Panel.TLabel \
         -background $colors(panel) -foreground $colors(accent) \
-        -font {{Segoe UI} 9 bold}
+        -font [::svvs::theme::font "Segoe UI" 9 bold]
     ttk::style configure Muted.Topbar.TLabel \
-        -background $colors(topbar) -foreground $colors(muted) -font {{Segoe UI} 9}
+        -background $colors(topbar) -foreground $colors(muted) \
+        -font [::svvs::theme::font "Segoe UI" 9]
 
     ttk::style configure TButton \
         -background $colors(topbar) \
         -foreground $colors(text) \
         -bordercolor $colors(border) \
-        -padding {9 4}
+        -padding [::svvs::theme::scaleList {9 4}]
     ttk::style map TButton \
         -background [list active $colors(accent) pressed $colors(selected)] \
         -foreground [list active white pressed white]
@@ -78,21 +142,21 @@ proc ::svvs::theme::apply {root} {
         -foreground $colors(text) \
         -borderwidth 0 \
         -relief flat \
-        -padding {8 2} \
+        -padding [::svvs::theme::scaleList {8 2}] \
         -anchor center
     ttk::style map Tool.TButton \
         -background [list active $colors(blockHeader) pressed $colors(selected)] \
         -foreground [list active white pressed white] \
         -relief [list active flat pressed flat]
-    ttk::style configure Mode.TButton -padding {4 8} -anchor center
+    ttk::style configure Mode.TButton -padding [::svvs::theme::scaleList {4 8}] -anchor center
 
     ttk::style configure TNotebook -background $colors(bg) -borderwidth 0 -tabmargins 0
     ttk::style configure TNotebook.Tab \
         -background $colors(panel) \
         -foreground $colors(muted) \
         -borderwidth 0 \
-        -padding {13 7} \
-        -font {{Segoe UI} 9}
+        -padding [::svvs::theme::scaleList {13 7}] \
+        -font [::svvs::theme::font "Segoe UI" 9]
     ttk::style map TNotebook.Tab \
         -background [list selected $colors(bg) active $colors(topbar)] \
         -foreground [list selected $colors(accent) active $colors(text)]
@@ -102,8 +166,8 @@ proc ::svvs::theme::apply {root} {
         -fieldbackground $colors(panel) \
         -foreground $colors(text) \
         -borderwidth 0 \
-        -rowheight 23 \
-        -font {{Segoe UI} 9}
+        -rowheight [::svvs::theme::scale 23] \
+        -font [::svvs::theme::font "Segoe UI" 9]
     ttk::style configure Treeview.Heading \
         -background $colors(topbar) \
         -foreground $colors(text)
@@ -111,11 +175,11 @@ proc ::svvs::theme::apply {root} {
         -background [list selected $colors(selected)] \
         -foreground [list selected white]
 
-    ttk::style configure TPanedwindow -background $colors(border) -sashwidth 1
+    ttk::style configure TPanedwindow -background $colors(border) -sashwidth [::svvs::theme::scale 1]
     ttk::style configure TScrollbar \
         -background $colors(blockHeader) \
         -troughcolor $colors(panelAlt) \
         -bordercolor $colors(panelAlt) \
         -arrowcolor $colors(muted) \
-        -width 10
+        -width [::svvs::theme::scale 10]
 }

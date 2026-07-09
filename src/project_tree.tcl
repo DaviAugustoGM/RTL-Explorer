@@ -31,9 +31,12 @@ proc ::svvs::project_tree::create {parent} {
     ttk::scrollbar $frame.scroll -orient vertical -command "$frame.tree yview"
     $frame.tree configure -yscrollcommand "$frame.scroll set"
 
-    grid $frame.title -row 0 -column 0 -columnspan 2 -sticky ew -padx 12 -pady {10 6}
-    grid $frame.tree -row 1 -column 0 -sticky nsew -padx {8 0} -pady {0 8}
-    grid $frame.scroll -row 1 -column 1 -sticky ns -padx {0 6} -pady {0 8}
+    grid $frame.title -row 0 -column 0 -columnspan 2 -sticky ew \
+        -padx [::svvs::theme::scale 12] -pady [::svvs::theme::scaleList {10 6}]
+    grid $frame.tree -row 1 -column 0 -sticky nsew \
+        -padx [::svvs::theme::scaleList {8 0}] -pady [::svvs::theme::scaleList {0 8}]
+    grid $frame.scroll -row 1 -column 1 -sticky ns \
+        -padx [::svvs::theme::scaleList {0 6}] -pady [::svvs::theme::scaleList {0 8}]
     grid columnconfigure $frame 0 -weight 1
     grid rowconfigure $frame 1 -weight 1
 
@@ -58,7 +61,8 @@ proc ::svvs::project_tree::loadIcons {} {
         if {![info exists icons($key)] && [file exists $file]} {
             set raw [image create photo -file $file]
             set img [image create photo]
-            $img copy $raw -subsample 6 6
+            set divisor [expr {max(1, int(round(6.0 / [::svvs::theme::scaleFactor])))}]
+            $img copy $raw -subsample $divisor $divisor
             image delete $raw
             set icons($key) $img
         }
@@ -217,7 +221,7 @@ proc ::svvs::project_tree::loadProjectFiles {files name} {
     set fsms [::svvs::sv_parser::parseFsmsFromFiles $projectFiles]
     if {[llength $fsms] > 0} {
         ::svvs::console::log "Maquinas de estado detectadas: [llength $fsms]" ok
-        ::svvs::fsm_viewer::showFSM [lindex $fsms 0]
+        ::svvs::fsm_viewer::showEmpty "Selecione um modulo ou maquina de estado no Explorer."
     } else {
         ::svvs::console::log "Nenhuma maquina de estado detectada." warn
         ::svvs::fsm_viewer::showEmpty
@@ -302,7 +306,7 @@ proc ::svvs::project_tree::importProjectData {data} {
     }
     ::svvs::project_tree::showProject
     if {[llength $fsms] > 0} {
-        ::svvs::fsm_viewer::showFSM [lindex $fsms 0]
+        ::svvs::fsm_viewer::showEmpty "Selecione um modulo ou maquina de estado no Explorer."
     } else {
         ::svvs::fsm_viewer::showEmpty
     }
@@ -433,6 +437,79 @@ proc ::svvs::project_tree::addLibraryItem {parent module} {
     set nodeModules($item) $module
 }
 
+proc ::svvs::project_tree::modeIsBlocks {} {
+    return [expr {[::svvs::layout::currentMode] eq "Blocos"}]
+}
+
+proc ::svvs::project_tree::modeIsFsm {} {
+    return [expr {[string match "Maquinas*" [::svvs::layout::currentMode]]}]
+}
+
+proc ::svvs::project_tree::fsmForModule {moduleName} {
+    variable fsms
+    foreach fsm $fsms {
+        if {[dict get $fsm module] eq $moduleName} {
+            return $fsm
+        }
+    }
+    return ""
+}
+
+proc ::svvs::project_tree::showFsmForModule {moduleName {fallbackName ""}} {
+    set matchingFsm [::svvs::project_tree::fsmForModule $moduleName]
+    if {$matchingFsm eq ""} {
+        if {$fallbackName eq ""} { set fallbackName $moduleName }
+        ::svvs::layout::showEmptyFsm $fallbackName
+    } else {
+        ::svvs::layout::showFsm $matchingFsm
+    }
+}
+
+proc ::svvs::project_tree::showSelectedFsm {} {
+    variable widget
+    variable nodeModules
+    variable nodeFsms
+    variable projectNodeModules
+    variable projectFileModules
+
+    set item [lindex [$widget selection] 0]
+    if {$item eq ""} {
+        return
+    }
+
+    if {[info exists nodeFsms($item)]} {
+        ::svvs::layout::showFsm $nodeFsms($item)
+        return
+    }
+
+    if {[info exists projectNodeModules($item)]} {
+        set module $projectNodeModules($item)
+        ::svvs::project_tree::showFsmForModule [dict get $module name]
+        return
+    }
+
+    if {[info exists nodeModules($item)]} {
+        set module $nodeModules($item)
+        ::svvs::project_tree::showFsmForModule [dict get $module name]
+        return
+    }
+
+    if {[info exists projectFileModules($item)]} {
+        set matchingFsm ""
+        foreach moduleName $projectFileModules($item) {
+            set matchingFsm [::svvs::project_tree::fsmForModule $moduleName]
+            if {$matchingFsm ne ""} {
+                break
+            }
+        }
+        if {$matchingFsm eq ""} {
+            ::svvs::layout::showEmptyFsm [$widget item $item -text]
+        } else {
+            ::svvs::layout::showFsm $matchingFsm
+        }
+    }
+}
+
 proc ::svvs::project_tree::onSelect {} {
     variable widget
     variable nodeModules
@@ -447,37 +524,32 @@ proc ::svvs::project_tree::onSelect {} {
     if {[info exists nodeModules($item)]} {
         set module $nodeModules($item)
         ::svvs::properties_panel::showModule $module
+        if {[::svvs::project_tree::modeIsFsm]} {
+            ::svvs::project_tree::showFsmForModule [dict get $module name]
+        }
     }
     if {[info exists projectNodeModules($item)]} {
         set module $projectNodeModules($item)
         ::svvs::properties_panel::showModule $module
-        set moduleName [dict get $module name]
-        set matchingFsm ""
-        foreach fsm $fsms {
-            if {[dict get $fsm module] eq $moduleName} {
-                set matchingFsm $fsm
-                break
-            }
-        }
-        if {$matchingFsm eq ""} {
-            ::svvs::layout::showEmptyFsm $moduleName
-        } else {
-            ::svvs::layout::showFsm $matchingFsm
+        if {[::svvs::project_tree::modeIsFsm]} {
+            ::svvs::project_tree::showFsmForModule [dict get $module name]
         }
     }
     if {[info exists projectFileModules($item)]} {
         set moduleNames $projectFileModules($item)
         set matchingFsm ""
-        foreach fsm $fsms {
-            if {[lsearch -exact $moduleNames [dict get $fsm module]] >= 0} {
-                set matchingFsm $fsm
+        foreach moduleName $moduleNames {
+            set matchingFsm [::svvs::project_tree::fsmForModule $moduleName]
+            if {$matchingFsm ne ""} {
                 break
             }
         }
-        if {$matchingFsm eq ""} {
-            ::svvs::layout::showEmptyFsm [$widget item $item -text]
-        } else {
-            ::svvs::layout::showFsm $matchingFsm
+        if {[::svvs::project_tree::modeIsFsm]} {
+            if {$matchingFsm eq ""} {
+                ::svvs::layout::showEmptyFsm [$widget item $item -text]
+            } else {
+                ::svvs::layout::showFsm $matchingFsm
+            }
         }
     }
     if {[info exists nodeFsms($item)]} {
@@ -493,6 +565,9 @@ proc ::svvs::project_tree::startDrag {x y} {
 
     set item [$widget identify row $x $y]
     set dragModule ""
+    if {![::svvs::project_tree::modeIsBlocks]} {
+        return
+    }
     if {$item ne "" && [info exists nodeModules($item)]} {
         set dragModule $nodeModules($item)
     }
@@ -501,6 +576,10 @@ proc ::svvs::project_tree::startDrag {x y} {
 proc ::svvs::project_tree::finishDrag {rootX rootY} {
     variable dragModule
     if {$dragModule eq ""} {
+        return
+    }
+    if {![::svvs::project_tree::modeIsBlocks]} {
+        set dragModule ""
         return
     }
 
@@ -514,6 +593,15 @@ proc ::svvs::project_tree::finishDrag {rootX rootY} {
 proc ::svvs::project_tree::addSelectedToCanvas {} {
     variable widget
     variable nodeModules
+
+    if {[::svvs::project_tree::modeIsFsm]} {
+        ::svvs::project_tree::showSelectedFsm
+        return
+    }
+    if {![::svvs::project_tree::modeIsBlocks]} {
+        return
+    }
+
     set item [lindex [$widget selection] 0]
     if {$item eq "" || ![info exists nodeModules($item)]} {
         return

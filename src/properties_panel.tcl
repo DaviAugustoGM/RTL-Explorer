@@ -13,17 +13,19 @@ proc ::svvs::properties_panel::create {parent} {
         -foreground [::svvs::theme::color text] \
         -insertbackground [::svvs::theme::color text] \
         -selectbackground [::svvs::theme::color selected] \
-        -font {Consolas 9} \
-        -padx 8 \
-        -pady 7 \
-        -spacing1 1 \
+        -font [::svvs::theme::font "Consolas" 9] \
+        -padx [::svvs::theme::scale 8] \
+        -pady [::svvs::theme::scale 7] \
+        -spacing1 [::svvs::theme::scale 1] \
         -borderwidth 0 \
         -highlightthickness 1 \
         -highlightbackground [::svvs::theme::color border] \
         -state disabled
 
-    grid $frame.title -row 0 -column 0 -sticky ew -padx 12 -pady {10 6}
-    grid $frame.text -row 1 -column 0 -sticky nsew -padx 8 -pady {0 8}
+    grid $frame.title -row 0 -column 0 -sticky ew \
+        -padx [::svvs::theme::scale 12] -pady [::svvs::theme::scaleList {10 6}]
+    grid $frame.text -row 1 -column 0 -sticky nsew \
+        -padx [::svvs::theme::scale 8] -pady [::svvs::theme::scaleList {0 8}]
     grid columnconfigure $frame 0 -weight 1
     grid rowconfigure $frame 1 -weight 1
 

@@ -6,6 +6,7 @@ namespace eval ::svvs::simulator_view {
     variable statusLabel ""
     variable cycleLabel ""
     variable pauseButton ""
+    variable buildProgress ""
     variable process ""
     variable lastBuildResult ""
     variable lastBackend ""
@@ -26,6 +27,7 @@ namespace eval ::svvs::simulator_view {
     variable lastSampleTime 0
     variable waveformWindowMs 8000
     variable waveformsEnabled 1
+    variable busyActive 0
     array set signalVars {}
     array set valueLabels {}
     array set signalWidths {}
@@ -56,18 +58,21 @@ proc ::svvs::simulator_view::create {parent} {
     variable statusLabel
     variable cycleLabel
     variable pauseButton
+    variable buildProgress
 
     set frame [ttk::frame $parent.inner -style TFrame]
     pack $frame -fill both -expand 1
 
-    set header [ttk::frame $frame.header -style Panel.TFrame -padding {14 10}]
+    set header [ttk::frame $frame.header -style Panel.TFrame \
+        -padding [::svvs::theme::scaleList {14 10}]]
     pack $header -side top -fill x
     ttk::label $header.title -text "Live simulation" -style Section.Panel.TLabel
     ttk::label $header.subtitle -text "sv2v + Yosys, selectable simulation engines" -style Muted.Panel.TLabel
     pack $header.title -side left
-    pack $header.subtitle -side left -padx {10 0}
+    pack $header.subtitle -side left -padx [::svvs::theme::scaleList {10 0}]
 
-    set controls [ttk::frame $frame.controls -style Topbar.TFrame -padding {10 7}]
+    set controls [ttk::frame $frame.controls -style Topbar.TFrame \
+        -padding [::svvs::theme::scaleList {10 7}]]
     pack $controls -side top -fill x
     ttk::button $controls.run -text "Run" -style Tool.TButton \
         -command ::svvs::simulator_view::run
@@ -79,21 +84,29 @@ proc ::svvs::simulator_view::create {parent} {
         -command ::svvs::simulator_view::stop
     set pauseButton $controls.pause
     foreach widget [list $controls.run $controls.buildRun $controls.pause $controls.stop] {
-        pack $widget -side left -padx {0 3}
+        pack $widget -side left -padx [::svvs::theme::scaleList {0 3}]
     }
     ttk::label $controls.engineLabel -text "Engine" -style Muted.Topbar.TLabel
     ttk::combobox $controls.engine -state readonly -width 11 \
         -values {Automatic CXXRTL Icarus Python} \
         -textvariable ::svvs::simulation_backends::selectedEngine
-    pack $controls.engineLabel -side left -padx {14 5}
+    pack $controls.engineLabel -side left -padx [::svvs::theme::scaleList {14 5}]
     pack $controls.engine -side left
     bind $controls.engine <<ComboboxSelected>> {::svvs::simulator_view::engineChanged}
     set cycleLabel [label $controls.cycle -text "Cycle 0" \
         -background [::svvs::theme::color topbar] -foreground [::svvs::theme::color text]]
-    pack $cycleLabel -side right -padx 10
+    pack $cycleLabel -side right -padx [::svvs::theme::scale 10]
     set statusLabel [label $controls.status -text "NOT BUILT" -background #51462d \
-        -foreground [::svvs::theme::color warning] -font {{Segoe UI} 8 bold} -padx 8 -pady 3]
+        -foreground [::svvs::theme::color warning] \
+        -font [::svvs::theme::font "Segoe UI" 8 bold] \
+        -padx [::svvs::theme::scale 8] -pady [::svvs::theme::scale 3]]
     pack $statusLabel -side right
+    ttk::progressbar $controls.progress \
+        -mode determinate \
+        -maximum 100 \
+        -value 0 \
+        -length [::svvs::theme::scale 120]
+    set buildProgress $controls.progress
 
     # Signal state is still maintained for the diagram and waveforms, but the
     # Simulation tab is intentionally limited to build/runtime configuration.
@@ -108,12 +121,14 @@ proc ::svvs::simulator_view::createWaveformPanel {parent} {
     variable waveform
     set frame [ttk::frame $parent -style Panel.TFrame]
     set waveform [canvas $frame.canvas -background [::svvs::theme::color bg] \
-        -height 150 -highlightthickness 1 \
+        -height [::svvs::theme::scale 150] -highlightthickness 1 \
         -highlightbackground [::svvs::theme::color border] -borderwidth 0]
     ttk::scrollbar $frame.scroll -orient vertical -command "$waveform yview"
     $waveform configure -yscrollcommand "$frame.scroll set"
-    grid $waveform -row 0 -column 0 -sticky nsew -padx {8 0} -pady 6
-    grid $frame.scroll -row 0 -column 1 -sticky ns -padx {0 6} -pady 6
+    grid $waveform -row 0 -column 0 -sticky nsew \
+        -padx [::svvs::theme::scaleList {8 0}] -pady [::svvs::theme::scale 6]
+    grid $frame.scroll -row 0 -column 1 -sticky ns \
+        -padx [::svvs::theme::scaleList {0 6}] -pady [::svvs::theme::scale 6]
     grid columnconfigure $frame 0 -weight 1
     grid rowconfigure $frame 0 -weight 1
     bind $waveform <Configure> {::svvs::simulator_view::drawWaveforms}
@@ -132,7 +147,7 @@ proc ::svvs::simulator_view::scrollWaveforms {delta} {
 }
 
 proc ::svvs::simulator_view::shortWaveformLabel {label availablePixels} {
-    set maxChars [expr {max(5, int($availablePixels / 7.0))}]
+    set maxChars [expr {max(5, int($availablePixels / double([::svvs::theme::scale 7])))}]
     if {[string length $label] <= $maxChars} { return $label }
     return "[string range $label 0 [expr {$maxChars - 4}]]..."
 }
@@ -145,6 +160,82 @@ proc ::svvs::simulator_view::setStatus {text mode} {
     set colorName [dict get $foregrounds $mode]
     $statusLabel configure -text [string toupper $text] \
         -background [dict get $colors $mode] -foreground [::svvs::theme::color $colorName]
+}
+
+proc ::svvs::simulator_view::beginBusy {text} {
+    variable buildProgress
+    variable busyActive
+    set busyActive 1
+    ::svvs::simulator_view::setStatus $text idle
+    if {[info exists ::svvs::layout::widgets(busyLabel)] &&
+        [winfo exists $::svvs::layout::widgets(busyLabel)]} {
+        set label $::svvs::layout::widgets(busyLabel)
+        set progress $::svvs::layout::widgets(busyProgress)
+        $label configure -text "$text..."
+        $progress configure -mode determinate -maximum 100 -value 0
+        if {[winfo manager $label] eq ""} {
+            pack $label -side left -padx [::svvs::theme::scaleList {10 4}]
+        }
+        if {[winfo manager $progress] eq ""} {
+            pack $progress -side left -padx [::svvs::theme::scaleList {0 8}]
+        }
+    }
+    if {$buildProgress ne "" && [winfo exists $buildProgress]} {
+        $buildProgress configure -mode determinate -maximum 100 -value 0
+        if {[winfo manager $buildProgress] eq ""} {
+            pack $buildProgress -side right -padx [::svvs::theme::scaleList {8 0}]
+        }
+    }
+    ::svvs::simulator_view::showBuildStep $text 3
+    update idletasks
+}
+
+proc ::svvs::simulator_view::showBuildStep {text percent} {
+    variable buildProgress
+    variable busyActive
+    if {!$busyActive} { return }
+    set percent [expr {max(0, min(100, int($percent)))}]
+    ::svvs::simulator_view::setStatus $text idle
+    if {[info exists ::svvs::layout::widgets(busyLabel)] &&
+        [winfo exists $::svvs::layout::widgets(busyLabel)]} {
+        set label $::svvs::layout::widgets(busyLabel)
+        set progress $::svvs::layout::widgets(busyProgress)
+        $label configure -text "$text..."
+        $progress configure -value $percent
+        if {[winfo manager $label] eq ""} {
+            pack $label -side left -padx [::svvs::theme::scaleList {10 4}]
+        }
+        if {[winfo manager $progress] eq ""} {
+            pack $progress -side left -padx [::svvs::theme::scaleList {0 8}]
+        }
+    }
+    if {$buildProgress ne "" && [winfo exists $buildProgress]} {
+        $buildProgress configure -value $percent
+        if {[winfo manager $buildProgress] eq ""} {
+            pack $buildProgress -side right -padx [::svvs::theme::scaleList {8 0}]
+        }
+    }
+    update idletasks
+}
+
+proc ::svvs::simulator_view::endBusy {} {
+    variable buildProgress
+    variable busyActive
+    set busyActive 0
+    if {[info exists ::svvs::layout::widgets(busyProgress)] &&
+        [winfo exists $::svvs::layout::widgets(busyProgress)]} {
+        set label $::svvs::layout::widgets(busyLabel)
+        set progress $::svvs::layout::widgets(busyProgress)
+        catch {$progress configure -value 0}
+        catch {pack forget $progress}
+        catch {pack forget $label}
+        catch {$label configure -text ""}
+    }
+    if {$buildProgress ne "" && [winfo exists $buildProgress]} {
+        catch {$buildProgress configure -value 0}
+        catch {pack forget $buildProgress}
+    }
+    update idletasks
 }
 
 proc ::svvs::simulator_view::refreshSignals {} {
@@ -245,6 +336,17 @@ proc ::svvs::simulator_view::renderSignalRows {} {
 }
 
 proc ::svvs::simulator_view::build {} {
+    ::svvs::simulator_view::beginBusy "Building"
+    ::svvs::simulation_model::buildLog "Build and Run iniciado."
+    set code [catch {::svvs::simulator_view::buildCore} result options]
+    ::svvs::simulator_view::endBusy
+    if {$code != 0} {
+        return -options $options $result
+    }
+    return $result
+}
+
+proc ::svvs::simulator_view::buildCore {} {
     variable currentModel
     variable lastBuildResult
     variable lastBackend
@@ -253,7 +355,6 @@ proc ::svvs::simulator_view::build {} {
     set lastBuildResult ""
     set lastBackend ""
     ::svvs::simulator_view::clearWaveformHistory
-    ::svvs::simulator_view::setStatus "Building" idle
     update idletasks
     set result [::svvs::simulation_model::prepare]
     set currentModel [dict get $result model]
@@ -270,9 +371,11 @@ proc ::svvs::simulator_view::build {} {
         return 0
     }
     set lastBuildResult $result
+    ::svvs::simulator_view::showBuildStep "Starting simulator" 96
     if {![::svvs::simulator_view::startBackend $result]} {
         return 0
     }
+    ::svvs::simulator_view::showBuildStep "Simulator ready" 100
     ::svvs::console::log "Build concluida e pronta para simulacao." ok
     return 1
 }
@@ -292,6 +395,8 @@ proc ::svvs::simulator_view::startBackend {result {backend ""}} {
     }
     set lastBackend $backend
     set command [linsert [dict get $backend command] 0 |]
+    ::svvs::simulation_model::buildLog \
+        "Iniciando processo do simulador: [::svvs::simulation_model::commandText [dict get $backend command]]"
     if {[catch {set process [open $command r+]} message]} {
         set process ""
         ::svvs::simulator_view::setStatus "Start error" error
@@ -307,6 +412,7 @@ proc ::svvs::simulator_view::startBackend {result {backend ""}} {
         ::svvs::console::log "Automatic engine fallback:\n[dict get $backend diagnostics]" warn
     }
     ::svvs::console::log "Motor ativo: $engine." ok
+    ::svvs::simulation_model::buildLog "Simulador iniciado e conectado a GUI." ok
     return 1
 }
 
@@ -706,51 +812,59 @@ proc ::svvs::simulator_view::drawWaveforms {} {
     set width [winfo width $waveform]
     set height [winfo height $waveform]
     if {$width < 20} { set width 700 }
-    if {$height < 20} { set height 150 }
-    $waveform create text 14 16 -text "LIVE WAVEFORMS" -anchor w \
-        -fill [::svvs::theme::color muted] -font {{Segoe UI} 8 bold}
+    if {$height < 20} { set height [::svvs::theme::scale 150] }
+    $waveform create text [::svvs::theme::scale 14] [::svvs::theme::scale 16] \
+        -text "LIVE WAVEFORMS" -anchor w \
+        -fill [::svvs::theme::color muted] -font [::svvs::theme::font "Segoe UI" 8 bold]
     if {!$waveformsEnabled} {
         $waveform configure -scrollregion [list 0 0 $width $height]
-        $waveform create text 22 55 \
+        $waveform create text [::svvs::theme::scale 22] [::svvs::theme::scale 55] \
             -text "Waveform generation disabled." \
-            -anchor w -fill [::svvs::theme::color muted]
+            -anchor w -fill [::svvs::theme::color muted] \
+            -font [::svvs::theme::font "Segoe UI" 8]
         return
     }
     if {$currentModel eq ""} { return }
     set outputs [dict get $currentModel traces]
     if {[llength $outputs] == 0} {
         $waveform configure -scrollregion [list 0 0 $width $height]
-        $waveform create text 22 55 -text "Add signal blocks to select waveforms." -anchor w \
-            -fill [::svvs::theme::color muted]
+        $waveform create text [::svvs::theme::scale 22] [::svvs::theme::scale 55] \
+            -text "Add signal blocks to select waveforms." -anchor w \
+            -fill [::svvs::theme::color muted] -font [::svvs::theme::font "Segoe UI" 8]
         return
     }
-    set x0 [expr {max(92, min(170, int($width * 0.27)))}]
-    set x1 [expr {$width - 18}]
-    if {$x1 <= $x0 + 40} { set x0 72 }
-    set rowHeight 48
-    set contentHeight [expr {max($height, 42 + ([llength $outputs] * $rowHeight))}]
+    set x0 [expr {max([::svvs::theme::scale 92], min([::svvs::theme::scale 170], int($width * 0.27)))}]
+    set x1 [expr {$width - [::svvs::theme::scale 18]}]
+    if {$x1 <= $x0 + [::svvs::theme::scale 40]} { set x0 [::svvs::theme::scale 72] }
+    set rowHeight [::svvs::theme::scale 48]
+    set contentHeight [expr {max($height, [::svvs::theme::scale 42] + ([llength $outputs] * $rowHeight))}]
     $waveform configure -scrollregion [list 0 0 $width $contentHeight]
     set endTime [expr {$lastSampleTime > 0 ? $lastSampleTime : [clock milliseconds]}]
     set startTime [expr {max($simulationStartTime, $endTime - $waveformWindowMs)}]
     if {$endTime <= $startTime} { set endTime [expr {$startTime + 1}] }
-    $waveform create line $x0 29 $x1 29 -fill [::svvs::theme::color border]
+    $waveform create line $x0 [::svvs::theme::scale 29] $x1 [::svvs::theme::scale 29] \
+        -fill [::svvs::theme::color border]
     for {set tick 0} {$tick <= 4} {incr tick} {
         set fraction [expr {$tick / 4.0}]
         set x [expr {$x0 + (($x1 - $x0) * $fraction)}]
         set tickTime [expr {$startTime + (($endTime - $startTime) * $fraction)}]
         set label [format "%.2fs" [expr {($tickTime - $simulationStartTime) / 1000.0}]]
-        $waveform create line $x 26 $x [expr {$contentHeight - 8}] -fill #262b31
-        $waveform create text $x 17 -text $label -anchor n -fill [::svvs::theme::color muted] \
-            -font {{Cascadia Mono} 7}
+        $waveform create line $x [::svvs::theme::scale 26] $x \
+            [expr {$contentHeight - [::svvs::theme::scale 8]}] -fill #262b31
+        $waveform create text $x [::svvs::theme::scale 17] -text $label -anchor n \
+            -fill [::svvs::theme::color muted] -font [::svvs::theme::font "Cascadia Mono" 7]
     }
-    set y 48
+    set y [::svvs::theme::scale 48]
     foreach signal $outputs {
         set name [dict get $signal name]
         set label $name
         if {[dict exists $signal label]} { set label [dict get $signal label] }
-        set label [::svvs::simulator_view::shortWaveformLabel $label [expr {$x0 - 34}]]
-        $waveform create text 14 $y -text $label -anchor w -fill [::svvs::theme::color text]
-        $waveform create line $x0 [expr {$y + 12}] $x1 [expr {$y + 12}] -fill #30363d
+        set label [::svvs::simulator_view::shortWaveformLabel $label \
+            [expr {$x0 - [::svvs::theme::scale 34]}]]
+        $waveform create text [::svvs::theme::scale 14] $y -text $label -anchor w \
+            -fill [::svvs::theme::color text] -font [::svvs::theme::font "Segoe UI" 8]
+        $waveform create line $x0 [expr {$y + [::svvs::theme::scale 12]}] \
+            $x1 [expr {$y + [::svvs::theme::scale 12]}] -fill #30363d
         if {[info exists history($name)] && [llength $history($name)] > 0} {
             set signalWidth 1
             if {[dict exists $signal width]} { set signalWidth [dict get $signal width] }
@@ -799,9 +913,9 @@ proc ::svvs::simulator_view::timeToX {timestamp startTime endTime x0 x1} {
 proc ::svvs::simulator_view::drawDigitalWave {samples x0 x1 y startTime endTime} {
     variable waveform
     if {[llength $samples] == 0} { return }
-    set highY [expr {$y - 5}]
-    set lowY [expr {$y + 18}]
-    set middleY [expr {$y + 7}]
+    set highY [expr {$y - [::svvs::theme::scale 5]}]
+    set lowY [expr {$y + [::svvs::theme::scale 18]}]
+    set middleY [expr {$y + [::svvs::theme::scale 7]}]
     set first [lindex $samples 0]
     set previousValue [lindex $first 1]
     set previousY [expr {$previousValue eq "1" ? $highY : ($previousValue eq "0" ? $lowY : $middleY)}]
@@ -815,7 +929,8 @@ proc ::svvs::simulator_view::drawDigitalWave {samples x0 x1 y startTime endTime}
         set previousValue $value
     }
     lappend points $x1 $previousY
-    $waveform create line $points -fill [::svvs::theme::color accentHover] -width 2
+    $waveform create line $points -fill [::svvs::theme::color accentHover] \
+        -width [::svvs::theme::scale 2]
 }
 
 proc ::svvs::simulator_view::drawMappedWaveLabels {samples x0 x1 y startTime endTime valueMap} {
@@ -833,9 +948,10 @@ proc ::svvs::simulator_view::drawMappedWaveLabels {samples x0 x1 y startTime end
         set sx [::svvs::simulator_view::timeToX $timestamp $startTime $endTime $x0 $x1]
         set ex [::svvs::simulator_view::timeToX $nextTime $startTime $endTime $x0 $x1]
         set display [dict get $valueMap $key]
-        if {$ex - $sx >= max(26, [string length $display] * 6)} {
-            $waveform create text [expr {($sx + $ex) / 2.0}] [expr {$y + 7}] -text $display \
-                -fill [::svvs::theme::color text] -font {{Segoe UI} 7 bold}
+        if {$ex - $sx >= max([::svvs::theme::scale 26], [string length $display] * [::svvs::theme::scale 6])} {
+            $waveform create text [expr {($sx + $ex) / 2.0}] \
+                [expr {$y + [::svvs::theme::scale 7]}] -text $display \
+                -fill [::svvs::theme::color text] -font [::svvs::theme::font "Segoe UI" 7 bold]
         }
     }
 }
@@ -843,8 +959,8 @@ proc ::svvs::simulator_view::drawMappedWaveLabels {samples x0 x1 y startTime end
 proc ::svvs::simulator_view::drawBusWave {samples x0 x1 y startTime endTime width base {valueMap {}}} {
     variable waveform
     if {[llength $samples] == 0} { return }
-    set topY [expr {$y - 4}]
-    set bottomY [expr {$y + 18}]
+    set topY [expr {$y - [::svvs::theme::scale 4]}]
+    set bottomY [expr {$y + [::svvs::theme::scale 18]}]
     set middleY [expr {($topY + $bottomY) / 2.0}]
     set count [llength $samples]
     for {set index 0} {$index < $count} {incr index} {
@@ -853,7 +969,7 @@ proc ::svvs::simulator_view::drawBusWave {samples x0 x1 y startTime endTime widt
         if {$index + 1 < $count} { set nextTime [lindex [lindex $samples [expr {$index + 1}]] 0] }
         set sx [::svvs::simulator_view::timeToX $timestamp $startTime $endTime $x0 $x1]
         set ex [::svvs::simulator_view::timeToX $nextTime $startTime $endTime $x0 $x1]
-        set slant [expr {min(6.0, max(0.0, ($ex - $sx) / 3.0))}]
+        set slant [expr {min([::svvs::theme::scale 6], max(0.0, ($ex - $sx) / 3.0))}]
         set left [expr {$index == 0 ? 0.0 : $slant}]
         set right [expr {$index + 1 == $count ? 0.0 : $slant}]
         set outline [expr {$value in {x z} ? [::svvs::theme::color error] : [::svvs::theme::color accentHover]}]
@@ -862,13 +978,14 @@ proc ::svvs::simulator_view::drawBusWave {samples x0 x1 y startTime endTime widt
             [expr {$sx + $left}] $topY [expr {$ex - $right}] $topY \
             $ex $middleY [expr {$ex - $right}] $bottomY \
             [expr {$sx + $left}] $bottomY $sx $middleY]
-        $waveform create polygon $points -fill $fill -outline $outline -width 1
+        $waveform create polygon $points -fill $fill -outline $outline \
+            -width [::svvs::theme::scale 1]
         set display [::svvs::simulation_components::formatMappedValue \
             $value $width $base $valueMap]
-        set available [expr {$ex - $sx - 8}]
-        if {$available >= max(20, [string length $display] * 6)} {
+        set available [expr {$ex - $sx - [::svvs::theme::scale 8]}]
+        if {$available >= max([::svvs::theme::scale 20], [string length $display] * [::svvs::theme::scale 6])} {
             $waveform create text [expr {($sx + $ex) / 2.0}] $middleY -text $display \
-                -fill $outline -font {{Cascadia Mono} 7} -anchor center
+                -fill $outline -font [::svvs::theme::font "Cascadia Mono" 7] -anchor center
         }
     }
 }

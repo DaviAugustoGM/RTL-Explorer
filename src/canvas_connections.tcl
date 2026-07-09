@@ -5,6 +5,8 @@ namespace eval ::svvs::canvas_connections {
     variable routeDragField ""
     variable routeDragMoved 0
     variable simplifiedMode 0
+    variable wiresVisible 1
+    variable snapEnabled 0
     variable simplifiedRoutes
     variable selectedSimplePair ""
     variable simpleDragPair ""
@@ -15,6 +17,29 @@ namespace eval ::svvs::canvas_connections {
     array set simplifiedRoutes {}
     variable seq 0
     array set connections {}
+}
+
+proc ::svvs::canvas_connections::toggleSnap {} {
+    variable snapEnabled
+    set snapEnabled [expr {!$snapEnabled}]
+    ::svvs::layout::setToolbarActive "Snap" $snapEnabled
+    if {$snapEnabled} {
+        ::svvs::console::log "Snap de conexoes ativado."
+    } else {
+        ::svvs::console::log "Snap de conexoes desativado."
+    }
+}
+
+proc ::svvs::canvas_connections::toggleWires {} {
+    variable wiresVisible
+    set wiresVisible [expr {!$wiresVisible}]
+    ::svvs::layout::setToolbarActive "Wires" $wiresVisible
+    ::svvs::canvas_connections::refreshDisplay
+    if {$wiresVisible} {
+        ::svvs::console::log "Fios visiveis."
+    } else {
+        ::svvs::console::log "Fios ocultos. As conexoes continuam ativas."
+    }
 }
 
 proc ::svvs::canvas_connections::handlePortClick {portTag} {
@@ -92,12 +117,12 @@ proc ::svvs::canvas_connections::drawConnectionWithId {
     set coords [::svvs::canvas_connections::wireCoords $fromTag $toTag $routeX1 $routeY $routeX2]
     $canvas create line {*}$coords \
         -fill [::svvs::theme::color bg] \
-        -width 12 \
+        -width [::svvs::theme::scale 12] \
         -smooth false \
         -tags [list $id $hitId connection-hit]
     $canvas create line {*}$coords \
         -fill [::svvs::theme::color wire] \
-        -width [expr {$width > 1 ? 3 : 2}] \
+        -width [::svvs::theme::scale [expr {$width > 1 ? 3 : 2}]] \
         -smooth false \
         -arrow last \
         -tags [list $id connection]
@@ -105,14 +130,14 @@ proc ::svvs::canvas_connections::drawConnectionWithId {
         $canvas create oval 0 0 0 0 \
             -fill [::svvs::theme::color accent] \
             -outline white \
-            -width 1 \
+            -width [::svvs::theme::scale 1] \
             -state hidden \
             -tags [list $id connection-route-handle "route-handle:$handle"]
     }
     $canvas create text 0 0 \
         -text "" \
         -fill [::svvs::theme::color accent] \
-        -font {{Cascadia Mono} 8 bold} \
+        -font [::svvs::theme::font "Cascadia Mono" 8 bold] \
         -state hidden \
         -tags [list $id connection-range-label]
     $canvas lower $hitId
@@ -474,10 +499,11 @@ proc ::svvs::canvas_connections::updateGeometry {id} {
             set midX [lindex $center 0]
             set midY [lindex $center 1]
             $canvas coords $item \
-                [expr {$midX - 5}] [expr {$midY - 5}] \
-                [expr {$midX + 5}] [expr {$midY + 5}]
+                [expr {$midX - [::svvs::theme::scale 5]}] [expr {$midY - [::svvs::theme::scale 5]}] \
+                [expr {$midX + [::svvs::theme::scale 5]}] [expr {$midY + [::svvs::theme::scale 5]}]
         } elseif {[lsearch -exact $tags "connection-range-label"] >= 0} {
-            $canvas coords $item [lindex $labelCenter 0] [expr {[lindex $labelCenter 1] - 12}]
+            $canvas coords $item [lindex $labelCenter 0] \
+                [expr {[lindex $labelCenter 1] - [::svvs::theme::scale 12]}]
             $canvas itemconfigure $item \
                 -text $rangeLabel \
                 -state [expr {$rangeLabel eq "" ? "hidden" : "normal"}]
@@ -528,13 +554,32 @@ proc ::svvs::canvas_connections::toggleSimplified {} {
 
 proc ::svvs::canvas_connections::refreshDisplay {} {
     variable simplifiedMode
+    variable wiresVisible
     set canvas $::svvs::canvas_blocks::canvas
     if {$canvas eq "" || ![winfo exists $canvas]} {
         return
     }
 
+    if {!$wiresVisible} {
+        foreach tag {
+            connection connection-hit connection-range-label connection-route-handle
+            simplified-connection simplified-wire simplified-hit simplified-route-handle
+            wire-marker
+        } {
+            foreach item [$canvas find withtag $tag] {
+                $canvas itemconfigure $item -state hidden
+            }
+        }
+        $canvas delete wire-marker
+        ::svvs::canvas_blocks::setSimplifiedBlockStyle $simplifiedMode
+        if {!$simplifiedMode} {
+            ::svvs::canvas_blocks::updateTextForZoom
+        }
+        return
+    }
+
     set detailedState [expr {$simplifiedMode ? "hidden" : "normal"}]
-    foreach tag {connection connection-hit} {
+    foreach tag {connection connection-hit connection-range-label} {
         foreach item [$canvas find withtag $tag] {
             $canvas itemconfigure $item -state $detailedState
         }
@@ -713,15 +758,15 @@ proc ::svvs::canvas_connections::rebuildSimplified {} {
         }
         $canvas create line {*}$coords \
             -fill [::svvs::theme::color bg] \
-            -width 12 \
+            -width [::svvs::theme::scale 12] \
             -smooth false \
             -tags [list simplified-connection simplified-hit "simple-pair:$key"]
         $canvas create line {*}$coords \
             -fill [::svvs::theme::color wire] \
-            -width 3 \
+            -width [::svvs::theme::scale 3] \
             -smooth false \
             -arrow $arrow \
-            -arrowshape {10 12 5} \
+            -arrowshape [::svvs::theme::scaleList {10 12 5}] \
             -tags [list simplified-connection simplified-wire "simple-pair:$key"]
 
         set handleCenters [dict get $geometry handles]
@@ -731,11 +776,13 @@ proc ::svvs::canvas_connections::rebuildSimplified {} {
             }
             lassign [dict get $handleCenters $handle] hx hy
             set state [expr {$key eq $selectedSimplePair ? "normal" : "hidden"}]
+            set radius [::svvs::theme::scale 5]
             $canvas create oval \
-                [expr {$hx - 5}] [expr {$hy - 5}] [expr {$hx + 5}] [expr {$hy + 5}] \
+                [expr {$hx - $radius}] [expr {$hy - $radius}] \
+                [expr {$hx + $radius}] [expr {$hy + $radius}] \
                 -fill [::svvs::theme::color accent] \
                 -outline white \
-                -width 1 \
+                -width [::svvs::theme::scale 1] \
                 -state $state \
                 -tags [list simplified-connection simplified-route-handle \
                     "simple-pair:$key" "simple-handle:$handle"]
@@ -818,6 +865,27 @@ proc ::svvs::canvas_connections::segmentsFor {id} {
     set coords [::svvs::canvas_connections::wireCoords \
         [dict get $conn from] [dict get $conn to] \
         [dict get $conn routeX1] [dict get $conn routeY] [dict get $conn routeX2]]
+    return [::svvs::canvas_connections::segmentsFromCoords $coords $id]
+}
+
+proc ::svvs::canvas_connections::simpleSegmentsFor {pair} {
+    variable simplifiedRoutes
+    if {![info exists simplifiedRoutes($pair)]} {
+        return {}
+    }
+    lassign [split $pair |] a b
+    set boundsA [::svvs::canvas_connections::blockBounds $a]
+    set boundsB [::svvs::canvas_connections::blockBounds $b]
+    if {$boundsA eq "" || $boundsB eq ""} {
+        return {}
+    }
+    set geometry [::svvs::canvas_connections::simplifiedGeometry \
+        $boundsA $boundsB $simplifiedRoutes($pair)]
+    return [::svvs::canvas_connections::segmentsFromCoords \
+        [dict get $geometry coords] "simple:$pair"]
+}
+
+proc ::svvs::canvas_connections::segmentsFromCoords {coords id} {
     set segments {}
     for {set i 0} {$i < [expr {[llength $coords] - 2}]} {incr i 2} {
         set x1 [lindex $coords $i]
@@ -827,11 +895,188 @@ proc ::svvs::canvas_connections::segmentsFor {id} {
         if {$x1 == $x2 && $y1 == $y2} {
             continue
         }
-        set orientation [expr {$y1 == $y2 ? "horizontal" : "vertical"}]
+        if {abs($y1 - $y2) < 0.001} {
+            set orientation horizontal
+        } elseif {abs($x1 - $x2) < 0.001} {
+            set orientation vertical
+        } else {
+            continue
+        }
         lappend segments [dict create \
             id $id x1 $x1 y1 $y1 x2 $x2 y2 $y2 orientation $orientation]
     }
     return $segments
+}
+
+proc ::svvs::canvas_connections::snapSegmentValue {value orientation {ignoreConnection ""} {ignorePair ""}} {
+    variable connections
+    variable simplifiedMode
+    variable simplifiedRoutes
+    variable snapEnabled
+    if {!$snapEnabled} {
+        return $value
+    }
+
+    set threshold [::svvs::theme::scale 10]
+    set bestValue $value
+    set bestDelta [expr {$threshold + 1.0}]
+    if {!$simplifiedMode} {
+        foreach id [array names connections] {
+            if {$id eq $ignoreConnection} {
+                continue
+            }
+            foreach segment [::svvs::canvas_connections::segmentsFor $id] {
+                if {[dict get $segment orientation] ne $orientation} {
+                    continue
+                }
+                if {$orientation eq "horizontal"} {
+                    set candidate [dict get $segment y1]
+                } else {
+                    set candidate [dict get $segment x1]
+                }
+                set delta [expr {abs($value - $candidate)}]
+                if {$delta <= $threshold && $delta < $bestDelta} {
+                    set bestDelta $delta
+                    set bestValue $candidate
+                }
+            }
+        }
+    }
+
+    if {$simplifiedMode} {
+        foreach pair [array names simplifiedRoutes] {
+            if {$pair eq $ignorePair} {
+                continue
+            }
+            foreach segment [::svvs::canvas_connections::simpleSegmentsFor $pair] {
+                if {[dict get $segment orientation] ne $orientation} {
+                    continue
+                }
+                if {$orientation eq "horizontal"} {
+                    set candidate [dict get $segment y1]
+                } else {
+                    set candidate [dict get $segment x1]
+                }
+                set delta [expr {abs($value - $candidate)}]
+                if {$delta <= $threshold && $delta < $bestDelta} {
+                    set bestDelta $delta
+                    set bestValue $candidate
+                }
+            }
+        }
+    }
+    return $bestValue
+}
+
+proc ::svvs::canvas_connections::nearestSnapCandidate {value candidates threshold} {
+    set bestValue $value
+    set bestDelta [expr {$threshold + 1.0}]
+    foreach candidate $candidates {
+        if {$candidate eq ""} {
+            continue
+        }
+        set delta [expr {abs($value - $candidate)}]
+        if {$delta <= $threshold && $delta < $bestDelta} {
+            set bestDelta $delta
+            set bestValue $candidate
+        }
+    }
+    return $bestValue
+}
+
+proc ::svvs::canvas_connections::snapDetailedRouteValue {id field value} {
+    variable connections
+    variable snapEnabled
+    if {!$snapEnabled || ![info exists connections($id)]} {
+        return $value
+    }
+
+    set conn $connections($id)
+    set fromCenter [::svvs::canvas_blocks::portCenter [dict get $conn from]]
+    set toCenter [::svvs::canvas_blocks::portCenter [dict get $conn to]]
+    set ax [lindex $fromCenter 0]
+    set ay [lindex $fromCenter 1]
+    set bx [lindex $toCenter 0]
+    set by [lindex $toCenter 1]
+    set routeX1 [dict get $conn routeX1]
+    set routeX2 [dict get $conn routeX2]
+    set threshold [::svvs::theme::scale 12]
+
+    switch -- $field {
+        routeY {
+            set candidates [list $ay $by]
+        }
+        routeX1 {
+            set candidates [list $ax $bx $routeX2]
+        }
+        routeX2 {
+            set candidates [list $ax $bx $routeX1]
+        }
+        default {
+            set candidates {}
+        }
+    }
+    return [::svvs::canvas_connections::nearestSnapCandidate $value $candidates $threshold]
+}
+
+proc ::svvs::canvas_connections::snapSimpleRouteValue {pair route field value} {
+    variable snapEnabled
+    if {!$snapEnabled} {
+        return $value
+    }
+
+    lassign [split $pair |] a b
+    set boundsA [::svvs::canvas_connections::blockBounds $a]
+    set boundsB [::svvs::canvas_connections::blockBounds $b]
+    if {$boundsA eq "" || $boundsB eq ""} {
+        return $value
+    }
+    set route [::svvs::canvas_connections::normalizeSimpleRoute $route]
+    lassign [::svvs::canvas_connections::automaticSides $boundsA $boundsB] autoA autoB
+    set sideA [dict get $route sideA]
+    set sideB [dict get $route sideB]
+    if {$sideA eq ""} { set sideA $autoA }
+    if {$sideB eq ""} { set sideB $autoB }
+    lassign [::svvs::canvas_connections::pointForSide $boundsA $sideA] ax ay
+    lassign [::svvs::canvas_connections::pointForSide $boundsB $sideB] bx by
+
+    set route1 [dict get $route route1]
+    set routeMid [dict get $route routeMid]
+    set route2 [dict get $route route2]
+    set threshold [::svvs::theme::scale 12]
+    switch -- [dict get $route orientation] {
+        HH {
+            switch -- $field {
+                route1 { set candidates [list $ax $bx $route2] }
+                routeMid { set candidates [list $ay $by] }
+                route2 { set candidates [list $ax $bx $route1] }
+                default { set candidates {} }
+            }
+        }
+        VV {
+            switch -- $field {
+                route1 { set candidates [list $ay $by $route2] }
+                routeMid { set candidates [list $ax $bx] }
+                route2 { set candidates [list $ay $by $route1] }
+                default { set candidates {} }
+            }
+        }
+        HV {
+            switch -- $field {
+                route1 { set candidates [list $ax $bx] }
+                routeMid { set candidates [list $ay $by] }
+                default { set candidates {} }
+            }
+        }
+        default {
+            switch -- $field {
+                route1 { set candidates [list $ay $by] }
+                routeMid { set candidates [list $ax $bx] }
+                default { set candidates {} }
+            }
+        }
+    }
+    return [::svvs::canvas_connections::nearestSnapCandidate $value $candidates $threshold]
 }
 
 proc ::svvs::canvas_connections::strictlyBetween {value a b} {
@@ -887,17 +1132,20 @@ proc ::svvs::canvas_connections::rebuildMarkers {} {
                     dict set seenCrossings $key 1
 
                     set overId [dict get $horizontal id]
-                    set overWidth [expr {[dict get $connections($overId) width] > 1 ? 3 : 2}]
+                    set overWidth [::svvs::theme::scale [expr {[dict get $connections($overId) width] > 1 ? 3 : 2}]]
                     set color [::svvs::theme::color wire]
                     if {$::svvs::canvas_blocks::selectedTag eq $overId} {
                         set color [::svvs::theme::color accent]
-                        incr overWidth 2
+                        incr overWidth [::svvs::theme::scale 2]
                     }
+                    set gap [::svvs::theme::scale 6]
+                    set bridge [::svvs::theme::scale 7]
                     $canvas create rectangle \
-                        [expr {$x - 6}] [expr {$y - 6}] [expr {$x + 6}] [expr {$y + 6}] \
+                        [expr {$x - $gap}] [expr {$y - $gap}] \
+                        [expr {$x + $gap}] [expr {$y + $gap}] \
                         -fill [::svvs::theme::color bg] -outline "" \
                         -tags [list wire-marker crossing-gap]
-                    $canvas create line [expr {$x - 7}] $y [expr {$x + 7}] $y \
+                    $canvas create line [expr {$x - $bridge}] $y [expr {$x + $bridge}] $y \
                         -fill $color -width $overWidth \
                         -tags [list wire-marker crossing-over]
                 }
@@ -924,11 +1172,13 @@ proc ::svvs::canvas_connections::rebuildMarkers {} {
             continue
         }
         lassign $endpointCoords($key) x y
+        set radius [::svvs::theme::scale 4]
         $canvas create oval \
-            [expr {$x - 4}] [expr {$y - 4}] [expr {$x + 4}] [expr {$y + 4}] \
+            [expr {$x - $radius}] [expr {$y - $radius}] \
+            [expr {$x + $radius}] [expr {$y + $radius}] \
             -fill [::svvs::theme::color text] \
             -outline [::svvs::theme::color bg] \
-            -width 1 \
+            -width [::svvs::theme::scale 1] \
             -tags [list wire-marker connection-junction]
     }
 
@@ -1045,9 +1295,19 @@ proc ::svvs::canvas_connections::dragRouteTo {screenX screenY} {
         set startsHorizontal [string match "H*" $orientation]
         if {($startsHorizontal && $simpleDragField eq "routeMid") ||
             (!$startsHorizontal && $simpleDragField ne "routeMid")} {
-            dict set route $simpleDragField [$canvas canvasy $screenY]
+            set value [$canvas canvasy $screenY]
+            set value [::svvs::canvas_connections::snapSegmentValue \
+                $value horizontal "" $simpleDragPair]
+            set value [::svvs::canvas_connections::snapSimpleRouteValue \
+                $simpleDragPair $route $simpleDragField $value]
+            dict set route $simpleDragField $value
         } else {
-            dict set route $simpleDragField [$canvas canvasx $screenX]
+            set value [$canvas canvasx $screenX]
+            set value [::svvs::canvas_connections::snapSegmentValue \
+                $value vertical "" $simpleDragPair]
+            set value [::svvs::canvas_connections::snapSimpleRouteValue \
+                $simpleDragPair $route $simpleDragField $value]
+            dict set route $simpleDragField $value
         }
         set simplifiedRoutes($simpleDragPair) $route
         set routeDragMoved 1
@@ -1060,9 +1320,19 @@ proc ::svvs::canvas_connections::dragRouteTo {screenX screenY} {
 
     ::svvs::canvas_connections::materializeRoute $routeDragId
     if {$routeDragField eq "routeY"} {
-        dict set connections($routeDragId) $routeDragField [$canvas canvasy $screenY]
+        set value [$canvas canvasy $screenY]
+        set value [::svvs::canvas_connections::snapSegmentValue \
+            $value horizontal $routeDragId ""]
+        set value [::svvs::canvas_connections::snapDetailedRouteValue \
+            $routeDragId $routeDragField $value]
+        dict set connections($routeDragId) $routeDragField $value
     } else {
-        dict set connections($routeDragId) $routeDragField [$canvas canvasx $screenX]
+        set value [$canvas canvasx $screenX]
+        set value [::svvs::canvas_connections::snapSegmentValue \
+            $value vertical $routeDragId ""]
+        set value [::svvs::canvas_connections::snapDetailedRouteValue \
+            $routeDragId $routeDragField $value]
+        dict set connections($routeDragId) $routeDragField $value
     }
     set routeDragMoved 1
     ::svvs::canvas_connections::updateGeometry $routeDragId
@@ -1206,6 +1476,7 @@ proc ::svvs::canvas_connections::selectSimplePair {pair} {
     variable selectedSimplePair
     set selectedSimplePair $pair
     set ::svvs::canvas_blocks::selectedTag "simple:$pair"
+    set ::svvs::canvas_blocks::selectedTags {}
     ::svvs::canvas_connections::rebuildSimplified
     ::svvs::properties_panel::showWelcome
     ::svvs::console::log "Conexao simplificada selecionada."
@@ -1268,6 +1539,7 @@ proc ::svvs::canvas_connections::setSimplifiedSide {pair field side} {
     set simplifiedRoutes($pair) $route
     set selectedSimplePair $pair
     set ::svvs::canvas_blocks::selectedTag "simple:$pair"
+    set ::svvs::canvas_blocks::selectedTags {}
     ::svvs::canvas_connections::rebuildSimplified
     ::svvs::console::log "Lado da conexao simplificada alterado."
 }
@@ -1280,6 +1552,7 @@ proc ::svvs::canvas_connections::select {connTag} {
     }
 
     set ::svvs::canvas_blocks::selectedTag $connTag
+    set ::svvs::canvas_blocks::selectedTags {}
     ::svvs::canvas_blocks::paintSelection
     ::svvs::properties_panel::showConnection [dict create \
         signal [dict get $connections($connTag) signal] \
@@ -1419,12 +1692,12 @@ proc ::svvs::canvas_connections::paintSelection {{selected ""}} {
             continue
         }
         set conn $connections($id)
-        set normalWidth [expr {[dict get $conn width] > 1 ? 3 : 2}]
+        set normalWidth [::svvs::theme::scale [expr {[dict get $conn width] > 1 ? 3 : 2}]]
         set color [::svvs::theme::color wire]
         set drawWidth $normalWidth
         if {$id eq $selected} {
             set color [::svvs::theme::color accent]
-            set drawWidth [expr {$normalWidth + 2}]
+            set drawWidth [expr {$normalWidth + [::svvs::theme::scale 2]}]
         }
         foreach item [$canvas find withtag $id] {
             set tags [$canvas gettags $item]
@@ -1517,6 +1790,7 @@ proc ::svvs::canvas_connections::clearAll {} {
     variable routeDragField
     variable routeDragMoved
     variable simplifiedMode
+    variable wiresVisible
     variable simplifiedRoutes
     variable selectedSimplePair
     variable simpleDragPair
@@ -1529,7 +1803,9 @@ proc ::svvs::canvas_connections::clearAll {} {
     set routeDragField ""
     set routeDragMoved 0
     set simplifiedMode 0
+    set wiresVisible 1
     ::svvs::layout::setToolbarActive "Simple Wires" 0
+    ::svvs::layout::setToolbarActive "Wires" 1
     array unset simplifiedRoutes
     array set simplifiedRoutes {}
     set selectedSimplePair ""

@@ -3,6 +3,7 @@ namespace eval ::svvs::layout {
     variable icons
     variable tooltip ""
     variable toolbarActive
+    variable currentMode "Projeto"
     array set widgets {}
     array set icons {}
     array set toolbarActive {}
@@ -50,6 +51,9 @@ proc ::svvs::layout::createTopbar {parent} {
         {"Stop" {::svvs::simulator_view::stop}}
         {"Names" {::svvs::canvas_blocks::togglePortNames}}
         {"Simple Wires" {::svvs::canvas_connections::toggleSimplified}}
+        {"Wires" {::svvs::canvas_connections::toggleWires}}
+        {"Snap" {::svvs::canvas_connections::toggleSnap}}
+        {"Inferred Loops" {::svvs::fsm_viewer::toggleInferredLoops}}
         {"Waveforms" {::svvs::simulator_view::toggleWaveforms}}
     } {
         set text [lindex $item 0]
@@ -59,9 +63,9 @@ proc ::svvs::layout::createTopbar {parent} {
             -text $text \
             -background [::svvs::theme::color topbar] \
             -foreground [::svvs::theme::color muted] \
-            -font {{Segoe UI} 9} \
-            -padx 8 \
-            -pady 5 \
+            -font [::svvs::theme::font "Segoe UI" 9] \
+            -padx [::svvs::theme::scale 8] \
+            -pady [::svvs::theme::scale 5] \
             -cursor hand2
         set widgets(toolbar:$text) $top.$name
         set toolbarActive($top.$name) 0
@@ -71,12 +75,25 @@ proc ::svvs::layout::createTopbar {parent} {
         bind $top.$name <Button-1> $command
         pack $top.$name -side left -padx 0 -pady 0
     }
+    label $top.busyLabel \
+        -text "" \
+        -background [::svvs::theme::color topbar] \
+        -foreground [::svvs::theme::color accentHover] \
+        -font [::svvs::theme::font "Segoe UI" 9]
+    ttk::progressbar $top.busyProgress \
+        -mode determinate \
+        -maximum 100 \
+        -value 0 \
+        -length [::svvs::theme::scale 130]
+    set widgets(busyLabel) $top.busyLabel
+    set widgets(busyProgress) $top.busyProgress
     frame $parent.topbarDivider \
-        -height 1 \
+        -height [::svvs::theme::scale 1] \
         -background [::svvs::theme::color border] \
         -borderwidth 0
     pack $parent.topbarDivider -side top -fill x
     ::svvs::layout::setToolbarActive "Names" 1
+    ::svvs::layout::setToolbarActive "Wires" 1
     ::svvs::layout::setToolbarActive "Waveforms" $::svvs::simulator_view::waveformsEnabled
 }
 
@@ -112,7 +129,7 @@ proc ::svvs::layout::showFileMenu {widget} {
         -activeforeground white \
         -borderwidth 1 \
         -activeborderwidth 0 \
-        -font {{Segoe UI} 9}
+        -font [::svvs::theme::font "Segoe UI" 9]
     .fileMenu add command -label "Open Project" -command {::svvs::layout::openProject}
     .fileMenu add separator
     .fileMenu add command -label "Open Files" -command {::svvs::layout::openFiles}
@@ -123,7 +140,8 @@ proc ::svvs::layout::showFileMenu {widget} {
         -background [::svvs::theme::color panel] \
         -foreground [::svvs::theme::color text] \
         -activebackground [::svvs::theme::color selected] \
-        -activeforeground white
+        -activeforeground white \
+        -font [::svvs::theme::font "Segoe UI" 9]
     .fileMenu.valueMaps add command -label "Import Signal Value Maps..." \
         -command {::svvs::simulation_components::importValueMapsDialog}
     .fileMenu.valueMaps add command -label "Export Signal Value Maps..." \
@@ -162,7 +180,7 @@ proc ::svvs::layout::showAutoConnectMenu {widget} {
         -activeforeground white \
         -borderwidth 1 \
         -activeborderwidth 0 \
-        -font {{Segoe UI} 9}
+        -font [::svvs::theme::font "Segoe UI" 9]
     .autoConnectMenu add command -label "Connect matching ports" \
         -command {::svvs::canvas_connections::autoConnect}
     .autoConnectMenu add separator
@@ -345,7 +363,7 @@ proc ::svvs::layout::closeProject {} {
 proc ::svvs::layout::createSidebar {path} {
     variable icons
     variable widgets
-    set frame [ttk::frame $path -style Sidebar.TFrame -width 54]
+    set frame [ttk::frame $path -style Sidebar.TFrame -width [::svvs::theme::scale 54]]
     pack propagate $frame 0
 
     ::svvs::layout::loadIcons
@@ -370,13 +388,14 @@ proc ::svvs::layout::createSidebar {path} {
             -borderwidth 0 \
             -highlightthickness 1 \
             -highlightbackground [::svvs::theme::color sidebar] \
-            -width 42 \
-            -height 42 \
+            -width [::svvs::theme::scale 42] \
+            -height [::svvs::theme::scale 42] \
             -cursor hand2
         bind $button <Enter> [list ::svvs::layout::showTooltip $button $name]
         bind $button <Leave> {::svvs::layout::hideTooltip}
         set widgets(sidebar:$key) $button
-        pack $button -side top -padx 6 -pady {8 0}
+        pack $button -side top -padx [::svvs::theme::scale 6] \
+            -pady [::svvs::theme::scaleList {8 0}]
     }
 
     ::svvs::layout::setSidebarActive project
@@ -413,7 +432,8 @@ proc ::svvs::layout::loadIcons {} {
         if {![info exists icons($key)]} {
             set raw [image create photo -file $file]
             set img [image create photo]
-            $img copy $raw -subsample 4 4
+            set divisor [expr {max(1, int(round(4.0 / [::svvs::theme::scaleFactor])))}]
+            $img copy $raw -subsample $divisor $divisor
             image delete $raw
             set icons($key) $img
         }
@@ -424,8 +444,8 @@ proc ::svvs::layout::showTooltip {widget text} {
     variable tooltip
 
     ::svvs::layout::hideTooltip
-    set x [expr {[winfo rootx $widget] + [winfo width $widget] + 10}]
-    set y [expr {[winfo rooty $widget] + 8}]
+    set x [expr {[winfo rootx $widget] + [winfo width $widget] + [::svvs::theme::scale 10]}]
+    set y [expr {[winfo rooty $widget] + [::svvs::theme::scale 8]}]
     set tooltip .svvsTooltip
 
     toplevel $tooltip -background [::svvs::theme::color border]
@@ -435,9 +455,9 @@ proc ::svvs::layout::showTooltip {widget text} {
         -text $text \
         -background [::svvs::theme::color blockHeader] \
         -foreground [::svvs::theme::color text] \
-        -font {{Segoe UI} 9} \
-        -padx 9 \
-        -pady 5
+        -font [::svvs::theme::font "Segoe UI" 9] \
+        -padx [::svvs::theme::scale 9] \
+        -pady [::svvs::theme::scale 5]
     pack $tooltip.label -padx 1 -pady 1
 }
 
@@ -451,6 +471,8 @@ proc ::svvs::layout::hideTooltip {} {
 
 proc ::svvs::layout::selectMode {name} {
     variable widgets
+    variable currentMode
+    set currentMode $name
     if {[info exists widgets(notebook)]} {
         switch -glob -- $name {
             "Projeto" {
@@ -465,6 +487,7 @@ proc ::svvs::layout::selectMode {name} {
             }
             "Maquinas*" {
                 ::svvs::layout::setSidebarActive fsm
+                ::svvs::project_tree::showProject
                 $widgets(notebook) select $widgets(fsmTab)
             }
             "Simulacao" {
@@ -478,6 +501,33 @@ proc ::svvs::layout::selectMode {name} {
         }
     }
     ::svvs::console::log "Modo selecionado: $name"
+}
+
+proc ::svvs::layout::currentMode {} {
+    variable currentMode
+    return $currentMode
+}
+
+proc ::svvs::layout::onNotebookTabChanged {} {
+    variable widgets
+    variable currentMode
+
+    if {![info exists widgets(notebook)]} {
+        return
+    }
+
+    set selected [$widgets(notebook) select]
+    if {[info exists widgets(fsmTab)] && $selected eq $widgets(fsmTab)} {
+        set currentMode "Maquinas de estado"
+        ::svvs::layout::setSidebarActive fsm
+        ::svvs::project_tree::showProject
+    } elseif {[info exists widgets(simTab)] && $selected eq $widgets(simTab)} {
+        set currentMode "Simulacao"
+        ::svvs::layout::setSidebarActive simulation
+    } elseif {[info exists widgets(docTab)] && $selected eq $widgets(docTab)} {
+        set currentMode "Documentacao"
+        ::svvs::layout::setSidebarActive documentation
+    }
 }
 
 proc ::svvs::layout::showFsm {fsm} {
@@ -524,6 +574,7 @@ proc ::svvs::layout::createCenter {path} {
     $notebook add $fsmTab -text "FSM"
     $notebook add $simTab -text "Simulation"
     $notebook add $docTab -text "Documentation"
+    bind $notebook <<NotebookTabChanged>> +{::svvs::layout::onNotebookTabChanged}
     bind $notebook <<NotebookTabChanged>> +{::svvs::simulator_view::refreshSignals}
 
     return $notebook

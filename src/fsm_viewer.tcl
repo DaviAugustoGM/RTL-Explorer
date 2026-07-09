@@ -21,6 +21,7 @@ namespace eval ::svvs::fsm_viewer {
     variable edgeWidths
     variable labelSizes
     variable runtimeStates
+    variable showInferredLoops 0
     array set stateOffsets {}
     array set labelOffsets {}
     array set stateColors {}
@@ -29,6 +30,18 @@ namespace eval ::svvs::fsm_viewer {
     array set edgeWidths {}
     array set labelSizes {}
     array set runtimeStates {}
+}
+
+proc ::svvs::fsm_viewer::toggleInferredLoops {} {
+    variable showInferredLoops
+    set showInferredLoops [expr {!$showInferredLoops}]
+    ::svvs::layout::setToolbarActive "Inferred Loops" $showInferredLoops
+    ::svvs::fsm_viewer::redraw
+    if {$showInferredLoops} {
+        ::svvs::console::log "Loops inferidos visiveis."
+    } else {
+        ::svvs::console::log "Loops inferidos ocultos."
+    }
 }
 
 proc ::svvs::fsm_viewer::create {parent} {
@@ -97,13 +110,21 @@ proc ::svvs::fsm_viewer::editPress {x y} {
     variable canvas
     set stateDrag ""
     set labelDrag ""
-    set target [::svvs::fsm_viewer::tagValueAt $x $y {fsm-state: fsm-label:}]
+    set target [::svvs::fsm_viewer::tagValueAt $x $y {fsm-state: fsm-initial: fsm-label: fsm-reset-label:}]
     if {$target eq ""} {
         ::svvs::fsm_viewer::panStart $x $y
         return
     }
     lassign $target prefix value
-    if {$prefix eq "fsm-state:"} { set stateDrag $value } else { set labelDrag $value }
+    if {$prefix eq "fsm-state:"} {
+        set stateDrag $value
+    } elseif {$prefix eq "fsm-initial:"} {
+        set stateDrag "all:$value"
+    } elseif {$prefix eq "fsm-reset-label:"} {
+        set labelDrag "reset:$value"
+    } else {
+        set labelDrag $value
+    }
     set editLastX $x
     set editLastY $y
     $canvas configure -cursor hand2
@@ -156,14 +177,17 @@ proc ::svvs::fsm_viewer::showContextMenu {rootX rootY x y} {
     variable edgeColors
     variable edgeWidths
     variable labelSizes
-    set target [::svvs::fsm_viewer::tagValueAt $x $y {fsm-state: fsm-label: fsm-edge:}]
+    set target [::svvs::fsm_viewer::tagValueAt $x $y {fsm-state: fsm-initial: fsm-label: fsm-reset-label: fsm-edge:}]
     if {$target eq ""} { return }
     lassign $target prefix value
     catch {destroy .fsmContextMenu}
     menu .fsmContextMenu -tearoff 0 \
         -background [::svvs::theme::color panel] -foreground [::svvs::theme::color text] \
         -activebackground [::svvs::theme::color selected] -activeforeground white
-    if {$prefix eq "fsm-state:"} {
+    if {$prefix eq "fsm-state:" || $prefix eq "fsm-initial:"} {
+        if {$prefix eq "fsm-initial:"} {
+            set value "all:$value"
+        }
         .fsmContextMenu add command -label "Circle color..." \
             -command [list ::svvs::fsm_viewer::chooseStateColor $value]
         menu .fsmContextMenu.width -tearoff 0
@@ -177,6 +201,17 @@ proc ::svvs::fsm_viewer::showContextMenu {rootX rootY x y} {
             -command [list ::svvs::fsm_viewer::resetStatePosition $value]
         .fsmContextMenu add command -label "Reset style" \
             -command [list ::svvs::fsm_viewer::resetStateStyle $value]
+    } elseif {$prefix eq "fsm-reset-label:"} {
+        set labelKey "reset:$value"
+        menu .fsmContextMenu.font -tearoff 0
+        foreach size {7 8 9 10 12 14 16 18} {
+            .fsmContextMenu.font add command -label $size \
+                -command [list ::svvs::fsm_viewer::setLabelSize $labelKey $size]
+        }
+        .fsmContextMenu add cascade -label "Condition text size" -menu .fsmContextMenu.font
+        .fsmContextMenu add separator
+        .fsmContextMenu add command -label "Reset label position" \
+            -command [list ::svvs::fsm_viewer::resetLabelPosition $labelKey]
     } else {
         .fsmContextMenu add command -label "Transition color..." \
             -command [list ::svvs::fsm_viewer::chooseEdgeColor $value]
@@ -459,8 +494,8 @@ proc ::svvs::fsm_viewer::panEnd {} {
 
 proc ::svvs::fsm_viewer::scaledSize {base minimum maximum} {
     variable zoom
-    set size [expr {int(round($base * $zoom))}]
-    return [expr {max($minimum, min($maximum, $size))}]
+    set size [expr {int(round([::svvs::theme::scale $base] * $zoom))}]
+    return [expr {max([::svvs::theme::scale $minimum], min([::svvs::theme::scale $maximum], $size))}]
 }
 
 proc ::svvs::fsm_viewer::updateVisualScale {} {
@@ -481,7 +516,7 @@ proc ::svvs::fsm_viewer::updateVisualScale {} {
             set baseWidth 2
             set widthTag [::svvs::fsm_viewer::tagWithPrefix [$canvas gettags $item] "fsm-state-width:"]
             if {$widthTag ne ""} { set baseWidth [string range $widthTag [string length "fsm-state-width:"] end] }
-            $canvas itemconfigure $item -width [expr {max(1, round($baseWidth * $zoom))}]
+            $canvas itemconfigure $item -width [expr {max(1, round([::svvs::theme::scale $baseWidth] * $zoom))}]
         }
     }
     foreach item [$canvas find withtag fsm-transition-label] {
@@ -496,10 +531,10 @@ proc ::svvs::fsm_viewer::updateVisualScale {} {
             set baseWidth 2
             set widthTag [::svvs::fsm_viewer::tagWithPrefix [$canvas gettags $item] "fsm-edge-width:"]
             if {$widthTag ne ""} { set baseWidth [string range $widthTag [string length "fsm-edge-width:"] end] }
-            set lineWidth [expr {max(1, round($baseWidth * $zoom))}]
-            set arrowA [expr {max(5, round(8 * $zoom))}]
-            set arrowB [expr {max(6, round(10 * $zoom))}]
-            set arrowC [expr {max(3, round(4 * $zoom))}]
+            set lineWidth [expr {max(1, round([::svvs::theme::scale $baseWidth] * $zoom))}]
+            set arrowA [expr {max([::svvs::theme::scale 5], round([::svvs::theme::scale 8] * $zoom))}]
+            set arrowB [expr {max([::svvs::theme::scale 6], round([::svvs::theme::scale 10] * $zoom))}]
+            set arrowC [expr {max([::svvs::theme::scale 3], round([::svvs::theme::scale 4] * $zoom))}]
             $canvas itemconfigure $item -width $lineWidth \
                 -arrowshape [list $arrowA $arrowB $arrowC]
         }
@@ -524,13 +559,15 @@ proc ::svvs::fsm_viewer::createTransitionLabel {x y text extraTags {baseSize 8}}
     set textItem [$canvas create text $x $y \
         -text $text \
         -fill [::svvs::theme::color muted] \
-        -font [list Consolas $baseSize] \
+        -font [::svvs::theme::font "Consolas" $baseSize] \
         -anchor center \
         -tags [concat [list fsm-transition-label $idTag "fsm-label-size:$baseSize"] $extraTags]]
     set box [$canvas bbox $textItem]
     set background [$canvas create rectangle \
-        [expr {[lindex $box 0] - 4}] [expr {[lindex $box 1] - 2}] \
-        [expr {[lindex $box 2] + 4}] [expr {[lindex $box 3] + 2}] \
+        [expr {[lindex $box 0] - [::svvs::theme::scale 4]}] \
+        [expr {[lindex $box 1] - [::svvs::theme::scale 2]}] \
+        [expr {[lindex $box 2] + [::svvs::theme::scale 4]}] \
+        [expr {[lindex $box 3] + [::svvs::theme::scale 2]}] \
         -fill [::svvs::theme::color bg] \
         -outline "" \
         -tags [concat [list fsm-label-background $idTag] $extraTags]]
@@ -557,8 +594,10 @@ proc ::svvs::fsm_viewer::updateLabelBackgrounds {} {
         }
         set box [$canvas bbox $textItem]
         $canvas coords $background \
-            [expr {[lindex $box 0] - 4}] [expr {[lindex $box 1] - 2}] \
-            [expr {[lindex $box 2] + 4}] [expr {[lindex $box 3] + 2}]
+            [expr {[lindex $box 0] - [::svvs::theme::scale 4]}] \
+            [expr {[lindex $box 1] - [::svvs::theme::scale 2]}] \
+            [expr {[lindex $box 2] + [::svvs::theme::scale 4]}] \
+            [expr {[lindex $box 3] + [::svvs::theme::scale 2]}]
         $canvas lower $background $textItem
     }
 }
@@ -640,6 +679,47 @@ proc ::svvs::fsm_viewer::laneOffset {keys key} {
     return [expr {($index - (($count - 1) / 2.0)) * 18.0}]
 }
 
+proc ::svvs::fsm_viewer::inferredSelfLoops {states transitions} {
+    array set hasExplicitSelf {}
+    array set outgoingConditions {}
+    foreach transition $transitions {
+        set from [dict get $transition from]
+        set to [dict get $transition to]
+        set condition [string trim [dict get $transition condition]]
+        if {$from eq $to} {
+            set hasExplicitSelf($from) 1
+            continue
+        }
+        if {$condition eq "" || $condition eq "default"} {
+            continue
+        }
+        lappend outgoingConditions($from) $condition
+    }
+
+    set inferred {}
+    foreach state $states {
+        if {[info exists hasExplicitSelf($state)] || ![info exists outgoingConditions($state)]} {
+            continue
+        }
+        set pieces {}
+        foreach condition $outgoingConditions($state) {
+            set negated [::svvs::sv_parser::negateCondition $condition]
+            if {[lsearch -exact $pieces $negated] < 0} {
+                lappend pieces $negated
+            }
+        }
+        if {[llength $pieces] == 0} {
+            continue
+        }
+        lappend inferred [dict create \
+            from $state \
+            to $state \
+            condition [join $pieces " && "] \
+            inferred 1]
+    }
+    return $inferred
+}
+
 proc ::svvs::fsm_viewer::redraw {} {
     variable canvas
     variable currentFSM
@@ -652,6 +732,7 @@ proc ::svvs::fsm_viewer::redraw {} {
     variable edgeColors
     variable edgeWidths
     variable labelSizes
+    variable showInferredLoops
     if {$canvas eq "" || ![winfo exists $canvas]} {
         return
     }
@@ -666,7 +747,7 @@ proc ::svvs::fsm_viewer::redraw {} {
         $canvas create text [expr {$width / 2.0}] [expr {$height / 2.0}] \
             -text $emptyMessage \
             -fill [::svvs::theme::color muted] \
-            -font {{Segoe UI} 11}
+            -font [::svvs::theme::font "Segoe UI" 11]
         return
     }
 
@@ -676,33 +757,41 @@ proc ::svvs::fsm_viewer::redraw {} {
         return
     }
 
-    $canvas create text 22 20 \
+    $canvas create text [::svvs::theme::scale 22] [::svvs::theme::scale 20] \
         -text "[dict get $currentFSM module] / [dict get $currentFSM stateVariable]" \
         -fill [::svvs::theme::color text] \
-        -font {{Segoe UI} 11 bold} \
+        -font [::svvs::theme::font "Segoe UI" 11 bold] \
         -anchor nw \
         -tags fsm-title
 
     set count [llength $states]
     set transitions [dict get $currentFSM transitions]
+    if {$showInferredLoops} {
+        set transitions [concat $transitions \
+            [::svvs::fsm_viewer::inferredSelfLoops $states $transitions]]
+    }
     set layout [::svvs::fsm_viewer::layoutCells $states $transitions]
     set columns [dict get $layout columns]
     set cells [dict get $layout cells]
     set rows 1
-    set longestState 0
+    set longestState [string length "ANY STATE"]
     foreach state $states {
         set longestState [expr {max($longestState, [string length $state])}]
         set cell [dict get $cells $state]
         set rows [expr {max($rows, [lindex $cell 1] + 1)}]
     }
-    set stateDiameter [expr {max(92.0, min(176.0, 38.0 + ($longestState * 8.0)))}]
+    set rawDiameter [expr {38 + ($longestState * 8)}]
+    set minDiameter [::svvs::theme::scale 92]
+    set maxDiameter [::svvs::theme::scale 176]
+    set preferredDiameter [::svvs::theme::scale $rawDiameter]
+    set stateDiameter [expr {max(double($minDiameter), min(double($maxDiameter), double($preferredDiameter)))}]
     set stateRadius [expr {$stateDiameter / 2.0}]
-    set stepX [expr {$stateDiameter + 58.0}]
-    set stepY [expr {$stateDiameter + 58.0}]
+    set stepX [expr {$stateDiameter + [::svvs::theme::scale 58]}]
+    set stepY [expr {$stateDiameter + [::svvs::theme::scale 58]}]
     set layoutWidth [expr {($columns - 1) * $stepX}]
     set layoutHeight [expr {($rows - 1) * $stepY}]
     set left [expr {($width - $layoutWidth) / 2.0}]
-    set top [expr {max(86.0, (($height - $layoutHeight) / 2.0) + 18.0)}]
+    set top [expr {max(double([::svvs::theme::scale 86]), (($height - $layoutHeight) / 2.0) + [::svvs::theme::scale 18])}]
     set editKey [::svvs::fsm_viewer::fsmKey]
 
     array set positions {}
@@ -719,6 +808,7 @@ proc ::svvs::fsm_viewer::redraw {} {
     }
 
     array set edgeConditions {}
+    array set edgeInferred {}
     foreach transition $transitions {
         set from [dict get $transition from]
         set to [dict get $transition to]
@@ -729,6 +819,11 @@ proc ::svvs::fsm_viewer::redraw {} {
         set condition [dict get $transition condition]
         if {![info exists edgeConditions($key)]} {
             set edgeConditions($key) {}
+            set edgeInferred($key) 1
+        }
+        set inferred [expr {[dict exists $transition inferred] && [dict get $transition inferred]}]
+        if {!$inferred} {
+            set edgeInferred($key) 0
         }
         if {[lsearch -exact $edgeConditions($key) $condition] < 0} {
             lappend edgeConditions($key) $condition
@@ -759,12 +854,13 @@ proc ::svvs::fsm_viewer::redraw {} {
         if {$from eq $to} {
             set coords [list \
                 [expr {$fx + $stateRadius}] $fy \
-                [expr {$fx + $stateRadius + 30}] $fy \
-                [expr {$fx + $stateRadius + 30}] [expr {$fy - $stateRadius - 30}] \
-                $fx [expr {$fy - $stateRadius - 30}] \
+                [expr {$fx + $stateRadius + [::svvs::theme::scale 30]}] $fy \
+                [expr {$fx + $stateRadius + [::svvs::theme::scale 30]}] \
+                    [expr {$fy - $stateRadius - [::svvs::theme::scale 30]}] \
+                $fx [expr {$fy - $stateRadius - [::svvs::theme::scale 30]}] \
                 $fx [expr {$fy - $stateRadius}]]
             set lx [expr {$fx + ($stateRadius / 2.0)}]
-            set ly [expr {$fy - $stateRadius - 40}]
+            set ly [expr {$fy - $stateRadius - [::svvs::theme::scale 40]}]
         } else {
             set dx [expr {$tx - $fx}]
             set dy [expr {$ty - $fy}]
@@ -778,7 +874,7 @@ proc ::svvs::fsm_viewer::redraw {} {
                 set mid [expr {($sx + $ex) / 2.0}]
                 set coords [list $sx $sy $mid $sy $mid $ey $ex $ey]
                 set lx $mid
-                set ly [expr {($sy + $ey) / 2.0 - 11}]
+                set ly [expr {($sy + $ey) / 2.0 - [::svvs::theme::scale 11]}]
             } else {
                 set startOffset [::svvs::fsm_viewer::laneOffset $outgoingLanes($from,V) $key]
                 set endOffset [::svvs::fsm_viewer::laneOffset $incomingLanes($to,V) $key]
@@ -788,12 +884,12 @@ proc ::svvs::fsm_viewer::redraw {} {
                 set ey [expr {$ty + ($dy >= 0 ? -$stateRadius : $stateRadius)}]
                 set mid [expr {($sy + $ey) / 2.0}]
                 set coords [list $sx $sy $sx $mid $ex $mid $ex $ey]
-                if {abs($ex - $sx) < 24} {
-                    set lx [expr {$sx + 26}]
+                if {abs($ex - $sx) < [::svvs::theme::scale 24]} {
+                    set lx [expr {$sx + [::svvs::theme::scale 26]}]
                     set ly $mid
                 } else {
                     set lx [expr {($sx + $ex) / 2.0}]
-                    set ly [expr {$mid - 13}]
+                    set ly [expr {$mid - [::svvs::theme::scale 13]}]
                 }
             }
         }
@@ -804,13 +900,17 @@ proc ::svvs::fsm_viewer::redraw {} {
         set edgeColor [expr {[info exists edgeColors($styleKey)] ? $edgeColors($styleKey) : [::svvs::theme::color wire]}]
         set edgeWidth [expr {[info exists edgeWidths($styleKey)] ? $edgeWidths($styleKey) : 2}]
         set labelSize [expr {[info exists labelSizes($styleKey)] ? $labelSizes($styleKey) : 8}]
-        $canvas create line {*}$coords \
+        set lineOptions [list \
             -fill $edgeColor \
             -width $edgeWidth \
             -arrow last \
             -smooth true \
             -splinesteps 24 \
-            -tags [list fsm-transition "fsm-edge:$from:$to" "fsm-edge-width:$edgeWidth"]
+            -tags [list fsm-transition "fsm-edge:$from:$to" "fsm-edge-width:$edgeWidth"]]
+        if {[info exists edgeInferred($key)] && $edgeInferred($key)} {
+            lappend lineOptions -dash [list [::svvs::theme::scale 6] [::svvs::theme::scale 4]]
+        }
+        $canvas create line {*}$coords {*}$lineOptions
         if {$label ni {"" default}} {
             ::svvs::fsm_viewer::createTransitionLabel $lx $ly $label \
                 [list "fsm-label:$from:$to"] $labelSize
@@ -821,20 +921,37 @@ proc ::svvs::fsm_viewer::redraw {} {
         set initialState [dict get $currentFSM initialState]
         if {[info exists positions($initialState)]} {
             lassign $positions($initialState) ix iy
-            set markerX [expr {$ix - $stateRadius - 24}]
+            set markerGap [::svvs::theme::scale 18]
+            set markerX [expr {$ix - (2.0 * $stateRadius) - $markerGap}]
             set markerY $iy
+            set markerKey "all:$initialState"
+            set markerStyleKey "$editKey,$markerKey"
+            if {[info exists stateOffsets($markerStyleKey)]} {
+                set markerX [expr {$markerX + [lindex $stateOffsets($markerStyleKey) 0]}]
+                set markerY [expr {$markerY + [lindex $stateOffsets($markerStyleKey) 1]}]
+            }
+            set markerRadius $stateRadius
+            set markerColor [expr {[info exists stateColors($markerStyleKey)] ? $stateColors($markerStyleKey) : [::svvs::theme::color accent]}]
+            set markerWidth [expr {[info exists stateWidths($markerStyleKey)] ? $stateWidths($markerStyleKey) : 2}]
             $canvas create oval \
-                [expr {$markerX - 9}] [expr {$markerY - 9}] \
-                [expr {$markerX + 9}] [expr {$markerY + 9}] \
-                -fill [::svvs::theme::color accent] \
-                -outline [::svvs::theme::color accent] \
-                -tags [list fsm-initial-marker "fsm-initial:$initialState"]
+                [expr {$markerX - $markerRadius}] [expr {$markerY - $markerRadius}] \
+                [expr {$markerX + $markerRadius}] [expr {$markerY + $markerRadius}] \
+                -fill [::svvs::theme::color block] \
+                -outline $markerColor \
+                -width [::svvs::theme::scale $markerWidth] \
+                -tags [list fsm-state fsm-initial-marker "fsm-initial:$initialState" "fsm-state-width:$markerWidth"]
+            $canvas create text $markerX $markerY \
+                -text "ANY STATE" \
+                -fill [::svvs::theme::color text] \
+                -font [::svvs::theme::font "Segoe UI" 10 bold] \
+                -tags [list fsm-state fsm-initial-marker "fsm-initial:$initialState"]
             $canvas create line \
-                [expr {$markerX + 10}] $markerY \
-                [expr {$markerX + 20}] [expr {$markerY - 20}] \
+                [expr {$markerX + $markerRadius}] $markerY \
+                [expr {$markerX + $markerRadius + ($markerGap / 2.0)}] \
+                    [expr {$markerY - [::svvs::theme::scale 18]}] \
                 [expr {$ix - $stateRadius}] $iy \
                 -fill [::svvs::theme::color accent] \
-                -width 2 \
+                -width [::svvs::theme::scale 2] \
                 -arrow last \
                 -smooth true \
                 -splinesteps 24 \
@@ -843,9 +960,18 @@ proc ::svvs::fsm_viewer::redraw {} {
             if {[dict exists $currentFSM resetCondition]} {
                 set resetLabel [dict get $currentFSM resetCondition]
             }
+            set resetKey "reset:$initialState"
+            set resetStyleKey "$editKey,$resetKey"
+            set resetLabelX [expr {$markerX + $markerRadius + ($markerGap / 2.0)}]
+            set resetLabelY [expr {$markerY - $stateRadius - [::svvs::theme::scale 18]}]
+            if {[info exists labelOffsets($resetStyleKey)]} {
+                set resetLabelX [expr {$resetLabelX + [lindex $labelOffsets($resetStyleKey) 0]}]
+                set resetLabelY [expr {$resetLabelY + [lindex $labelOffsets($resetStyleKey) 1]}]
+            }
+            set resetLabelSize [expr {[info exists labelSizes($resetStyleKey)] ? $labelSizes($resetStyleKey) : 8}]
             ::svvs::fsm_viewer::createTransitionLabel \
-                [expr {$markerX + 10}] [expr {$markerY - 42}] $resetLabel \
-                [list "fsm-reset-label:$initialState"]
+                $resetLabelX $resetLabelY $resetLabel \
+                [list "fsm-reset-label:$initialState"] $resetLabelSize
         }
     }
 
@@ -859,12 +985,12 @@ proc ::svvs::fsm_viewer::redraw {} {
             [expr {$x + $stateRadius}] [expr {$y + $stateRadius}] \
             -fill [::svvs::theme::color block] \
             -outline $stateColor \
-            -width $stateWidth \
+            -width [::svvs::theme::scale $stateWidth] \
             -tags [list fsm-state "fsm-state:$state" "fsm-state-width:$stateWidth"]
         $canvas create text $x $y \
             -text $state \
             -fill [::svvs::theme::color text] \
-            -font {{Segoe UI} 10 bold} \
+            -font [::svvs::theme::font "Segoe UI" 10 bold] \
             -tags [list fsm-state "fsm-state:$state"]
     }
     variable zoom

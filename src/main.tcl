@@ -40,8 +40,9 @@ proc ::svvs::boot {} {
     variable appName
 
     wm title . $appName
-    wm geometry . 1280x820
-    wm minsize . 980 620
+    ::svvs::theme::configureScale .
+    wm geometry . [::svvs::theme::initialGeometry .]
+    wm minsize . [::svvs::theme::scale 980] [::svvs::theme::scale 620]
 
     ::svvs::theme::apply .
     ::svvs::layout::create .

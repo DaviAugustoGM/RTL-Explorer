@@ -144,8 +144,8 @@ proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
             set module [::svvs::simulation_components::configuredSignalModule \
                 $sourceKind $portName $portWidth]
             if {$module eq ""} { continue }
-            set signalX [expr {$x - 92}]
-            set signalY [expr {$portY - 22}]
+            set signalX [expr {$x - [::svvs::theme::scale 92]}]
+            set signalY [expr {$portY - [::svvs::theme::scale 22]}]
             set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
             if {$sourceKind eq "clock"} {
                 ::svvs::canvas_connections::drawConnection "port:$newId:clk" $portTag $portWidth
@@ -161,8 +161,8 @@ proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
             }
             set module [::svvs::simulation_components::configuredSignalModule probe $portName $portWidth]
             if {$module eq ""} { continue }
-            set signalX [expr {$x + $width + 28}]
-            set signalY [expr {$portY - 22}]
+            set signalX [expr {$x + $width + [::svvs::theme::scale 28]}]
+            set signalY [expr {$portY - [::svvs::theme::scale 22]}]
             set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
             ::svvs::canvas_connections::drawConnection $portTag "port:$newId:in" $portWidth
             incr outputCount
@@ -311,7 +311,8 @@ proc ::svvs::simulation_components::decorateBlock {id} {
     }
     if {[llength [$canvas find withtag "simulation-component:$id"]] == 0} {
         $canvas create text 0 0 -text "0" -fill [::svvs::theme::color accentHover] \
-            -font {{Cascadia Mono} 12 bold} -tags [list $tag "simulation-component:$id" simulation-component]
+            -font [::svvs::theme::font "Cascadia Mono" 12 bold] \
+            -tags [list $tag "simulation-component:$id" simulation-component]
         set script [list ::svvs::simulation_components::activateBlock $id]
         append script "\nbreak"
         $canvas bind "simulation-component:$id" <Button-1> $script
@@ -319,7 +320,7 @@ proc ::svvs::simulation_components::decorateBlock {id} {
     }
     if {[llength [$canvas find withtag "simulation-component-label:$id"]] == 0} {
         $canvas create text 0 0 -text "" -anchor s \
-            -fill [::svvs::theme::color muted] -font {{Segoe UI} 8} \
+            -fill [::svvs::theme::color muted] -font [::svvs::theme::font "Segoe UI" 8] \
             -tags [list $tag "simulation-component-label:$id" simulation-component-label]
     }
     ::svvs::simulation_components::layoutDecoration $id
@@ -338,7 +339,7 @@ proc ::svvs::simulation_components::layoutDecoration {id} {
     $::svvs::canvas_blocks::canvas coords "simulation-component:$id" \
         [expr {$x + $width / 2.0}] [expr {$y + $height / 2.0}]
     $::svvs::canvas_blocks::canvas coords "simulation-component-label:$id" \
-        [expr {$x + $width / 2.0}] [expr {$y - 5}]
+        [expr {$x + $width / 2.0}] [expr {$y - [::svvs::theme::scale 5]}]
 }
 
 proc ::svvs::simulation_components::updateNameDisplay {id} {
@@ -413,9 +414,9 @@ proc ::svvs::simulation_components::updateDisplay {id {liveValue ""}} {
     set canvas $::svvs::canvas_blocks::canvas
     if {$canvas ne "" && [winfo exists $canvas]} {
         set block $::svvs::canvas_blocks::blocks($id)
-        set available [expr {max(28, [dict get $block width] - 12)}]
+        set available [expr {max([::svvs::theme::scale 28], [dict get $block width] - [::svvs::theme::scale 12])}]
         set length [string length $display]
-        set fontSize [expr {max(5, min(12, int($available / max(1.0, $length * 0.62))))}]
+        set fontSize [expr {max([::svvs::theme::scale 5], min([::svvs::theme::scale 12], int($available / max(1.0, $length * 0.62))))}]
         $canvas itemconfigure "simulation-component:$id" -text $display \
             -font [list {Cascadia Mono} $fontSize bold]
     }

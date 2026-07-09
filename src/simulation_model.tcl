@@ -368,6 +368,33 @@ proc ::svvs::simulation_model::pythonExecutable {} {
     return [::svvs::toolchain::python]
 }
 
+proc ::svvs::simulation_model::progress {text percent} {
+    if {[llength [info commands ::svvs::simulator_view::showBuildStep]]} {
+        ::svvs::simulator_view::showBuildStep $text $percent
+    }
+}
+
+proc ::svvs::simulation_model::buildLog {message {level info}} {
+    if {[llength [info commands ::svvs::console::log]]} {
+        ::svvs::console::log "Build: $message" $level
+    }
+}
+
+proc ::svvs::simulation_model::quoteCommandArg {arg} {
+    if {[regexp {\s|["{}]} $arg]} {
+        return "\"[string map [list "\\" "\\\\" "\"" "\\\""] $arg]\""
+    }
+    return $arg
+}
+
+proc ::svvs::simulation_model::commandText {command} {
+    set result {}
+    foreach arg $command {
+        lappend result [::svvs::simulation_model::quoteCommandArg $arg]
+    }
+    return [join $result " "]
+}
+
 proc ::svvs::simulation_model::yosysQuote {path} {
     return "\"[string map {\\ / \" \\\"} [file normalize $path]]\""
 }
@@ -468,6 +495,7 @@ proc ::svvs::simulation_model::qualifyPackageImports {text packages} {
 }
 
 proc ::svvs::simulation_model::prepareSourceFiles {files directory} {
+    ::svvs::simulation_model::buildLog "Preparando copias normalizadas em: [file normalize $directory]"
     file mkdir $directory
     foreach stale [glob -nocomplain -directory $directory *] {
         if {[file isfile $stale]} { file delete -force $stale }
@@ -481,6 +509,7 @@ proc ::svvs::simulation_model::prepareSourceFiles {files directory} {
         set source [dict get $info path]
         set target [file join $directory [format "%03d_%s" [incr index] [file tail $source]]]
         file copy -force $source $target
+        ::svvs::simulation_model::buildLog "Pacote copiado: [file normalize $source] -> [file normalize $target]"
         lappend prepared $target
         lappend packageBasenames [dict get $info basename]
     }
@@ -506,6 +535,7 @@ proc ::svvs::simulation_model::prepareSourceFiles {files directory} {
         fconfigure $handle -encoding utf-8 -translation lf
         puts -nonewline $handle $text
         close $handle
+        ::svvs::simulation_model::buildLog "Fonte preparada: [file normalize $source] -> [file normalize $target]"
         lappend prepared $target
     }
     return $prepared
@@ -514,6 +544,7 @@ proc ::svvs::simulation_model::prepareSourceFiles {files directory} {
 proc ::svvs::simulation_model::prepare {} {
     variable buildDir
     variable topModule
+    ::svvs::simulation_model::progress "Checking diagram" 8
     set model [::svvs::simulation_model::diagramModel]
     if {[llength [dict get $model errors]] > 0} {
         return [dict create ok 0 model $model message [join [dict get $model errors] "\n"]]
@@ -523,14 +554,24 @@ proc ::svvs::simulation_model::prepare {} {
     }
 
     set buildDir [::svvs::toolchain::buildDirectory]
+    ::svvs::simulation_model::buildLog "Diretorio temporario da build: [file normalize $buildDir]"
+    ::svvs::simulation_model::buildLog \
+        "Modelo do diagrama: [llength [dict get $model inputs]] entrada(s), [llength [dict get $model outputs]] saida(s), [llength [dict get $model nets]] rede(s)."
     set topPath [file join $buildDir rtl_explorer_top.sv]
     set convertedPath [file join $buildDir rtl_explorer_design.v]
     set jsonPath [file join $buildDir netlist.json]
     set cxxrtlPath [file join $buildDir cxxrtl_model.cpp]
     set scriptPath [file join $buildDir synth.ys]
+    ::svvs::simulation_model::progress "Writing top module" 16
     ::svvs::simulation_model::writeTop $topPath $model
+    ::svvs::simulation_model::buildLog "Top wrapper criado: [file normalize $topPath]"
 
     set sourceFiles [::svvs::simulation_model::filesForDiagram]
+    ::svvs::simulation_model::buildLog "Arquivos RTL usados no diagrama: [llength $sourceFiles]"
+    foreach path $sourceFiles {
+        ::svvs::simulation_model::buildLog "Usando RTL: [file normalize $path]"
+    }
+    ::svvs::simulation_model::progress "Preparing sources" 24
     set files [::svvs::simulation_model::prepareSourceFiles \
         $sourceFiles [file join $buildDir sources]]
     set lines {}
@@ -539,6 +580,9 @@ proc ::svvs::simulation_model::prepare {} {
         lappend includeDirs [file dirname $path]
     }
     set includeDirs [lsort -unique $includeDirs]
+    foreach dir $includeDirs {
+        ::svvs::simulation_model::buildLog "Include dir: [file normalize $dir]"
+    }
     set sv2v [::svvs::simulation_model::sv2vExecutable]
     if {$sv2v eq ""} {
         return [dict create ok 0 missingTool sv2v model $model top $topPath script $scriptPath \
@@ -552,6 +596,8 @@ proc ::svvs::simulation_model::prepare {} {
     lappend sv2vCommand "--write=[file normalize $convertedPath]"
     foreach path $files { lappend sv2vCommand [file normalize $path] }
     lappend sv2vCommand [file normalize $topPath]
+    ::svvs::simulation_model::progress "sv2v" 38
+    ::svvs::simulation_model::buildLog "Executando sv2v: [::svvs::simulation_model::commandText $sv2vCommand]"
     if {[catch {exec {*}$sv2vCommand 2>@1} sv2vOutput]} {
         return [dict create ok 0 model $model top $topPath converted $convertedPath script $scriptPath \
             message "Falha no sv2v:\n$sv2vOutput"]
@@ -560,7 +606,9 @@ proc ::svvs::simulation_model::prepare {} {
         return [dict create ok 0 model $model top $topPath converted $convertedPath script $scriptPath \
             message "O sv2v terminou sem gerar o arquivo Verilog convertido."]
     }
+    ::svvs::simulation_model::buildLog "Verilog convertido criado: [file normalize $convertedPath]" ok
 
+    ::svvs::simulation_model::progress "Writing Yosys script" 52
     lappend lines "read_verilog [::svvs::simulation_model::yosysQuote $convertedPath]"
     lappend lines "hierarchy -check -top $topModule"
     lappend lines "proc; flatten; opt; memory; opt"
@@ -569,15 +617,25 @@ proc ::svvs::simulation_model::prepare {} {
     set handle [open $scriptPath w]
     puts $handle [join $lines "\n"]
     close $handle
+    ::svvs::simulation_model::buildLog "Script Yosys criado: [file normalize $scriptPath]"
+    foreach line $lines {
+        ::svvs::simulation_model::buildLog "Yosys step: $line"
+    }
 
     set yosys [::svvs::simulation_model::yosysExecutable]
     if {$yosys eq ""} {
         return [dict create ok 0 missingTool yosys model $model top $topPath converted $convertedPath script $scriptPath \
             message "Yosys nao foi encontrado. O projeto de sintese foi preparado, mas ainda nao pode ser executado."]
     }
+    ::svvs::simulation_model::progress "Yosys synthesis" 66
+    set yosysCommand [list $yosys -q -s $scriptPath]
+    ::svvs::simulation_model::buildLog "Executando Yosys: [::svvs::simulation_model::commandText $yosysCommand]"
     if {[catch {exec $yosys -q -s $scriptPath 2>@1} output]} {
         return [dict create ok 0 model $model converted $convertedPath message "Falha na sintese Yosys:\n$output"]
     }
+    ::svvs::simulation_model::progress "Netlist ready" 78
+    ::svvs::simulation_model::buildLog "JSON da sintese criado: [file normalize $jsonPath]" ok
+    ::svvs::simulation_model::buildLog "Modelo CXXRTL criado: [file normalize $cxxrtlPath]" ok
     return [dict create ok 1 model $model json $jsonPath cxxrtl $cxxrtlPath \
         top $topPath converted $convertedPath script $scriptPath]
 }

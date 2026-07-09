@@ -1,0 +1,3 @@
+Para atualizar o instalador windows:
+
+powershell -ExecutionPolicy Bypass -File .\build-installer.ps1

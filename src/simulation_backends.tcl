@@ -49,6 +49,16 @@ proc ::svvs::simulation_backends::cxxrtlIdentifier {name} {
     return $result
 }
 
+proc ::svvs::simulation_backends::progress {text percent} {
+    if {[llength [info commands ::svvs::simulator_view::showBuildStep]]} {
+        ::svvs::simulator_view::showBuildStep $text $percent
+    }
+}
+
+proc ::svvs::simulation_backends::buildLog {message {level info}} {
+    ::svvs::simulation_model::buildLog $message $level
+}
+
 proc ::svvs::simulation_backends::cppString {value} {
     return [string map [list "\\" "\\\\" "\"" "\\\""] $value]
 }
@@ -201,8 +211,10 @@ int main() {
 }
 
 proc ::svvs::simulation_backends::buildCxxrtl {result} {
+    ::svvs::simulation_backends::progress "CXXRTL compile" 86
     set compiler [::svvs::simulation_backends::compilerExecutable]
     set include [::svvs::simulation_backends::cxxrtlInclude]
+    ::svvs::simulation_backends::buildLog "Motor CXXRTL selecionado."
     if {$compiler eq ""} { error "C++ compiler not found for CXXRTL." }
     if {$include eq ""} { error "CXXRTL runtime headers not found." }
     if {![dict exists $result cxxrtl] || ![file exists [dict get $result cxxrtl]]} {
@@ -214,6 +226,7 @@ proc ::svvs::simulation_backends::buildCxxrtl {result} {
     set executable [file join $build "cxxrtl_simulator_[pid]${suffix}"]
     ::svvs::simulation_backends::removeStaleFiles $build "cxxrtl_simulator_*${suffix}" $executable
     ::svvs::simulation_backends::writeCxxrtlBridge $bridge [dict get $result model]
+    ::svvs::simulation_backends::buildLog "Bridge CXXRTL criado: [file normalize $bridge]"
     set oldPath $::env(PATH)
     set separator [::svvs::toolchain::pathSeparator]
     set ::env(PATH) "[file dirname $compiler]$separator$oldPath"
@@ -221,11 +234,14 @@ proc ::svvs::simulation_backends::buildCxxrtl {result} {
     if {$::tcl_platform(platform) eq "windows"} {
         lappend compilerFlags -static -static-libgcc -static-libstdc++
     }
-    set failed [catch {exec $compiler {*}$compilerFlags -I$include $bridge -o $executable 2>@1} output]
+    set compileCommand [concat [list $compiler] $compilerFlags [list -I$include $bridge -o $executable]]
+    ::svvs::simulation_backends::buildLog "Executando compilador C++: [::svvs::simulation_model::commandText $compileCommand]"
+    set failed [catch {exec {*}$compileCommand 2>@1} output]
     set ::env(PATH) $oldPath
     if {$failed} {
         error "CXXRTL compilation failed:\n$output"
     }
+    ::svvs::simulation_backends::buildLog "Executavel do simulador criado: [file normalize $executable]" ok
     return [list $executable]
 }
 
@@ -283,9 +299,11 @@ proc ::svvs::simulation_backends::writeIcarusTestbench {path model} {
 }
 
 proc ::svvs::simulation_backends::buildIcarus {result} {
+    ::svvs::simulation_backends::progress "Icarus compile" 86
     set iverilog [::svvs::simulation_backends::ossExecutable iverilog]
     set vvp [::svvs::simulation_backends::ossExecutable vvp]
     set python [::svvs::simulation_model::pythonExecutable]
+    ::svvs::simulation_backends::buildLog "Motor Icarus selecionado."
     if {$iverilog eq "" || $vvp eq ""} { error "Icarus Verilog was not found." }
     if {$python eq ""} { error "Python was not found for the Icarus adapter." }
     if {$::tcl_platform(platform) eq "windows" && [string first " " $iverilog] >= 0} {
@@ -301,12 +319,16 @@ proc ::svvs::simulation_backends::buildIcarus {result} {
     ::svvs::simulation_backends::removeStaleFiles $build icarus_backend_*.tsv $metadata
     set suiteRoot [file dirname [file dirname $iverilog]]
     ::svvs::simulation_backends::writeIcarusTestbench $testbench [dict get $result model]
+    ::svvs::simulation_backends::buildLog "Testbench Icarus criado: [file normalize $testbench]"
     set adapter [file join $::APP_DIR icarus_backend.py]
-    set failed [catch {exec $python $adapter --compile $iverilog $suiteRoot $compiled \
-        [dict get $result converted] $testbench 2>@1} output]
+    set compileCommand [list $python $adapter --compile $iverilog $suiteRoot $compiled \
+        [dict get $result converted] $testbench]
+    ::svvs::simulation_backends::buildLog "Executando Icarus: [::svvs::simulation_model::commandText $compileCommand]"
+    set failed [catch {exec {*}$compileCommand 2>@1} output]
     if {$failed} {
         error "Icarus compilation failed:\n$output"
     }
+    ::svvs::simulation_backends::buildLog "Design Icarus compilado: [file normalize $compiled]" ok
     set handle [open $metadata w]
     puts $handle "VVP\t[file normalize $vvp]"
     puts $handle "ROOT\t[file normalize $suiteRoot]"
@@ -318,17 +340,23 @@ proc ::svvs::simulation_backends::buildIcarus {result} {
         }
     }
     close $handle
+    ::svvs::simulation_backends::buildLog "Metadados Icarus criados: [file normalize $metadata]"
     return [list $python $adapter $metadata]
 }
 
 proc ::svvs::simulation_backends::buildPython {result} {
+    ::svvs::simulation_backends::progress "Python engine check" 86
     set python [::svvs::simulation_model::pythonExecutable]
+    ::svvs::simulation_backends::buildLog "Motor Python selecionado."
     if {$python eq ""} { error "Python was not found." }
     set script [file join $::APP_DIR netlist_sim.py]
-    if {[catch {exec $python $script --check [dict get $result json] \
-            $::svvs::simulation_model::topModule 2>@1} output]} {
+    set checkCommand [list $python $script --check [dict get $result json] \
+            $::svvs::simulation_model::topModule]
+    ::svvs::simulation_backends::buildLog "Validando netlist no Python: [::svvs::simulation_model::commandText $checkCommand]"
+    if {[catch {exec {*}$checkCommand 2>@1} output]} {
         error "Python engine cannot safely run this netlist:\n$output"
     }
+    ::svvs::simulation_backends::buildLog "Netlist aprovado para motor Python." ok
     return [list $python $script [dict get $result json] $::svvs::simulation_model::topModule]
 }
 
@@ -340,13 +368,18 @@ proc ::svvs::simulation_backends::prepare {result} {
     set engines [expr {$selectedEngine eq "Automatic" ? {CXXRTL Icarus Python} : [list $selectedEngine]}]
     set failures {}
     set builders [dict create CXXRTL buildCxxrtl Icarus buildIcarus Python buildPython]
+    ::svvs::simulation_backends::buildLog "Motores candidatos: [join $engines {, }]"
     foreach engine $engines {
+        ::svvs::simulation_backends::progress "Preparing $engine" 82
         set commandName "::svvs::simulation_backends::[dict get $builders $engine]"
         if {![catch {set command [$commandName $result]} message]} {
             set activeEngine $engine
             set lastDiagnostics [join $failures "\n"]
+            ::svvs::simulation_backends::progress "$engine ready" 95
+            ::svvs::simulation_backends::buildLog "Motor pronto: $engine" ok
             return [dict create ok 1 engine $engine command $command diagnostics $lastDiagnostics]
         }
+        ::svvs::simulation_backends::buildLog "Falha no motor $engine: $message" warn
         lappend failures "$engine: $message"
     }
     set activeEngine ""

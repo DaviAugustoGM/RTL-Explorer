@@ -40,6 +40,45 @@ function Copy-Directory([string]$Source, [string]$Destination) {
     Copy-Item -Path (Join-Path $Source '*') -Destination $Destination -Recurse -Force
 }
 
+function Copy-FileToDirectory([string]$SourceFile, [string]$DestinationDirectory) {
+    if (-not (Test-Path -LiteralPath $SourceFile)) {
+        throw "Required file was not found: $SourceFile"
+    }
+    New-Item -ItemType Directory -Force $DestinationDirectory | Out-Null
+    Copy-Item -LiteralPath $SourceFile -Destination $DestinationDirectory -Force
+}
+
+function Copy-OssCadRuntime([string]$Source, [string]$Destination) {
+    New-Item -ItemType Directory -Force $Destination | Out-Null
+
+    $BinDestination = Join-Path $Destination 'bin'
+    foreach ($name in @('iverilog.exe', 'libvvp-1.dll', 'vvp.exe', 'yosys.exe', 'yosys-abc.exe')) {
+        Copy-FileToDirectory (Join-Path $Source "bin\$name") $BinDestination
+    }
+
+    $LibSource = Join-Path $Source 'lib'
+    $LibDestination = Join-Path $Destination 'lib'
+    New-Item -ItemType Directory -Force $LibDestination | Out-Null
+    foreach ($name in @('python3.exe', 'python3.11.exe')) {
+        $file = Join-Path $LibSource $name
+        if (Test-Path -LiteralPath $file) {
+            Copy-Item -LiteralPath $file -Destination $LibDestination -Force
+        }
+    }
+    Get-ChildItem $LibSource -File -Filter '*.dll' |
+        Copy-Item -Destination $LibDestination -Force
+
+    Copy-Directory (Join-Path $LibSource 'ivl') (Join-Path $LibDestination 'ivl')
+    Copy-Directory (Join-Path $LibSource 'python3.11') (Join-Path $LibDestination 'python3.11')
+    foreach ($name in @('site-packages', 'test', 'idlelib', 'ensurepip')) {
+        Remove-StageItem (Join-Path $LibDestination "python3.11\$name")
+    }
+    Get-ChildItem (Join-Path $LibDestination 'python3.11') -Recurse -Directory -Filter '__pycache__' |
+        ForEach-Object { Remove-StageItem $_.FullName }
+
+    Copy-Directory (Join-Path $Source 'share\yosys') (Join-Path $Destination 'share\yosys')
+}
+
 function Remove-StageItem([string]$Path) {
     $FullPath = [IO.Path]::GetFullPath($Path)
     if (-not $FullPath.StartsWith($StageDirectory, [StringComparison]::OrdinalIgnoreCase)) {
@@ -106,11 +145,19 @@ if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalTcl 'bin\wish
 } else {
     $TclInstaller = Join-Path $Cache "SetupTcl-$($Versions.Tcl)-x64_Bawt-$($Versions.Bawt).exe"
     Get-Download "https://www.bawt.tcl3d.org/download/Tcl-Pure/SetupTcl-$($Versions.Tcl)-x64_Bawt-$($Versions.Bawt).exe" $TclInstaller
-    New-Item -ItemType Directory -Force $TclDestination | Out-Null
+    New-Item -ItemType Directory -Force (Split-Path $TclDestination) | Out-Null
     $process = Start-Process -FilePath $TclInstaller -Wait -PassThru -ArgumentList @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$TclDestination`""
     )
-    if ($process.ExitCode -ne 0) { throw "Tcl/Tk staging failed with code $($process.ExitCode)." }
+    if ($process.ExitCode -ne 0) {
+        if (Test-Path -LiteralPath (Join-Path $LocalTcl 'bin\wish86.exe')) {
+            Write-Warning "Tcl/Tk installer failed with code $($process.ExitCode). Reusing local Tcl/Tk runtime."
+            Remove-StageItem $TclDestination
+            Copy-Directory $LocalTcl $TclDestination
+        } else {
+            throw "Tcl/Tk staging failed with code $($process.ExitCode)."
+        }
+    }
 }
 Get-ChildItem $TclDestination -Filter 'unins*' -File | Remove-Item -Force
 Remove-StageItem (Join-Path $TclDestination 'include')
@@ -130,9 +177,14 @@ if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalOss 'bin\yosy
     if (-not (Test-Path -LiteralPath (Join-Path $OssExtract 'oss-cad-suite\bin\yosys.exe'))) {
         New-Item -ItemType Directory -Force $OssExtract | Out-Null
         $process = Start-Process -FilePath $OssInstaller -Wait -PassThru -ArgumentList @('-y', "-o$OssExtract")
-        if ($process.ExitCode -ne 0) { throw "OSS CAD Suite extraction failed." }
+        $YosysAfterExtract = Join-Path $OssExtract 'oss-cad-suite\bin\yosys.exe'
+        if ($process.ExitCode -ne 0 -and -not (Test-Path -LiteralPath $YosysAfterExtract)) {
+            throw "OSS CAD Suite extraction failed with code $($process.ExitCode)."
+        } elseif ($process.ExitCode -ne 0) {
+            Write-Warning "OSS CAD Suite extractor returned code $($process.ExitCode), but yosys.exe was extracted. Continuing."
+        }
     }
-    Copy-Directory (Join-Path $OssExtract 'oss-cad-suite') $OssDestination
+    Copy-OssCadRuntime (Join-Path $OssExtract 'oss-cad-suite') $OssDestination
 }
 Reduce-OssCadRuntime $OssDestination
 
@@ -169,7 +221,7 @@ $Required = @(
     'runtime\tcl\bin\wish86.exe',
     'tools\oss-cad-suite\bin\yosys.exe',
     'tools\oss-cad-suite\bin\iverilog.exe',
-    'tools\oss-cad-suite\lib\python3.exe',
+    'tools\oss-cad-suite\bin\vvp.exe',
     'tools\w64devkit\bin\g++.exe',
     'tools\sv2v\sv2v.exe'
 )

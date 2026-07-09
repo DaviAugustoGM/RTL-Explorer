@@ -4,6 +4,7 @@ namespace eval ::svvs::canvas_blocks {
     variable tagToBlock
     variable tagToPort
     variable selectedTag ""
+    variable selectedTags
     variable dragTag ""
     variable resizeTag ""
     variable zoom 1.0
@@ -11,9 +12,15 @@ namespace eval ::svvs::canvas_blocks {
     variable dragLastX 0
     variable dragLastY 0
     variable viewportPanning 0
+    variable boxSelecting 0
+    variable boxMoved 0
+    variable boxStartX 0
+    variable boxStartY 0
+    variable boxRect ""
     array set blocks {}
     array set tagToBlock {}
     array set tagToPort {}
+    set selectedTags {}
 }
 
 proc ::svvs::canvas_blocks::create {parent} {
@@ -62,12 +69,12 @@ proc ::svvs::canvas_blocks::loadSamples {modules} {
         return
     }
 
-    set x 90
-    set y 80
+    set x [::svvs::theme::scale 90]
+    set y [::svvs::theme::scale 80]
     foreach module $modules {
         ::svvs::canvas_blocks::drawBlock $module $x $y
-        incr x 280
-        incr y 72
+        incr x [::svvs::theme::scale 280]
+        incr y [::svvs::theme::scale 72]
     }
 
     ::svvs::canvas_connections::drawConnection "uart_rx.data_out" "fifo_sync.din" 8
@@ -80,11 +87,15 @@ proc ::svvs::canvas_blocks::clearCanvas {} {
     variable tagToBlock
     variable tagToPort
     variable selectedTag
+    variable selectedTags
     variable dragTag
     variable resizeTag
     variable zoom
     variable showPortNames
     variable viewportPanning
+    variable boxSelecting
+    variable boxMoved
+    variable boxRect
 
     if {$canvas ne "" && [winfo exists $canvas]} {
         $canvas delete all
@@ -96,12 +107,16 @@ proc ::svvs::canvas_blocks::clearCanvas {} {
     array set tagToBlock {}
     array set tagToPort {}
     set selectedTag ""
+    set selectedTags {}
     set dragTag ""
     set resizeTag ""
     set zoom 1.0
     set showPortNames 1
     ::svvs::layout::setToolbarActive "Names" 1
     set viewportPanning 0
+    set boxSelecting 0
+    set boxMoved 0
+    set boxRect ""
     ::svvs::canvas_connections::clearAll
     after idle ::svvs::canvas_blocks::centerViewport
 }
@@ -195,15 +210,17 @@ proc ::svvs::canvas_blocks::drawBlock {module x y} {
     set rows [expr {max([llength $inputs], [llength $outputs])}]
     if {[::svvs::simulation_components::isBuiltin $module]} {
         if {[::svvs::simulation_components::isVirtual $module]} {
-            set width 64
-            set height 64
+            set width [::svvs::theme::scale 64]
+            set height [::svvs::theme::scale 64]
         } else {
-            set width 170
-            set height [expr {max(72, 52 + ($rows * 20))}]
+            set width [::svvs::theme::scale 170]
+            set rawHeight [expr {52 + ($rows * 20)}]
+            set height [expr {max([::svvs::theme::scale 72], [::svvs::theme::scale $rawHeight])}]
         }
     } else {
-        set width 220
-        set height [expr {max(82, 58 + ($rows * 24))}]
+        set width [::svvs::theme::scale 220]
+        set rawHeight [expr {58 + ($rows * 24)}]
+        set height [expr {max([::svvs::theme::scale 82], [::svvs::theme::scale $rawHeight])}]
     }
     set id "block[incr ::svvs::state(blockSeq)]"
     return [::svvs::canvas_blocks::drawBlockWithId $id $module $x $y $width $height]
@@ -222,16 +239,17 @@ proc ::svvs::canvas_blocks::drawBlockWithId {id module x y width height} {
     $canvas create rectangle $x $y [expr {$x + $width}] [expr {$y + $height}] \
         -fill [::svvs::theme::color block] \
         -outline [::svvs::theme::color border] \
-        -width 1 \
+        -width [::svvs::theme::scale 1] \
         -tags [list $tag block-body]
-    $canvas create rectangle $x $y [expr {$x + $width}] [expr {$y + 34}] \
+    set headerHeight [::svvs::theme::scale 34]
+    $canvas create rectangle $x $y [expr {$x + $width}] [expr {$y + $headerHeight}] \
         -fill [::svvs::theme::color blockHeader] \
         -outline [::svvs::theme::color border] \
         -tags [list $tag block-header]
-    $canvas create text [expr {$x + 12}] [expr {$y + 17}] \
+    $canvas create text [expr {$x + [::svvs::theme::scale 12]}] [expr {$y + ($headerHeight / 2.0)}] \
         -text [dict get $module name] \
         -fill white \
-        -font {{Segoe UI} 10 bold} \
+        -font [::svvs::theme::font "Segoe UI" 10 bold] \
         -anchor w \
         -tags [list $tag block-title]
 
@@ -247,7 +265,7 @@ proc ::svvs::canvas_blocks::drawBlockWithId {id module x y width height} {
         $canvas create text 0 0 \
             -text [::svvs::canvas_blocks::portLabel $port] \
             -fill [::svvs::theme::color text] \
-            -font {Consolas 9} \
+            -font [::svvs::theme::font "Consolas" 9] \
             -anchor w \
             -tags [list $tag $pTag port-label]
 
@@ -301,10 +319,10 @@ proc ::svvs::canvas_blocks::portLabel {port} {
 
 proc ::svvs::canvas_blocks::portY {y height index count} {
     if {$count <= 1} {
-        return [expr {$y + max(50, $height / 2.0)}]
+        return [expr {$y + max([::svvs::theme::scale 50], $height / 2.0)}]
     }
-    set first [expr {$y + 50}]
-    set last [expr {$y + $height - 22}]
+    set first [expr {$y + [::svvs::theme::scale 50]}]
+    set last [expr {$y + $height - [::svvs::theme::scale 22]}]
     return [expr {$first + (($last - $first) * $index / double($count - 1))}]
 }
 
@@ -325,14 +343,16 @@ proc ::svvs::canvas_blocks::layoutBlock {id} {
         if {[lsearch -exact $tags "block-body"] >= 0} {
             $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + $height}]
         } elseif {[lsearch -exact $tags "block-header"] >= 0} {
-            $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + 34}]
+            $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + [::svvs::theme::scale 34]}]
         } elseif {[lsearch -exact $tags "block-title"] >= 0} {
-            $canvas coords $item [expr {$x + 12}] [expr {$y + 17}]
+            $canvas coords $item [expr {$x + [::svvs::theme::scale 12]}] \
+                [expr {$y + ([::svvs::theme::scale 34] / 2.0)}]
         } elseif {[lsearch -exact $tags "resize-handle"] >= 0} {
+            set handleSize [::svvs::theme::scale 12]
             $canvas coords $item \
-                [expr {$x + $width - 12}] [expr {$y + $height}] \
+                [expr {$x + $width - $handleSize}] [expr {$y + $height}] \
                 [expr {$x + $width}] [expr {$y + $height}] \
-                [expr {$x + $width}] [expr {$y + $height - 12}]
+                [expr {$x + $width}] [expr {$y + $height - $handleSize}]
         }
     }
 
@@ -347,21 +367,32 @@ proc ::svvs::canvas_blocks::layoutBlock {id} {
 proc ::svvs::canvas_blocks::layoutPorts {id ports direction x y width height} {
     variable canvas
 
+    set compactVirtual 0
+    if {[info exists ::svvs::canvas_blocks::blocks($id)]} {
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        set compactVirtual [::svvs::simulation_components::isVirtual $module]
+    }
+
     set count [llength $ports]
     set index 0
+    set portRadius [::svvs::theme::scale 5]
     foreach port $ports {
         set pName [dict get $port name]
         set pTag "port:$id:$pName"
-        set rowY [::svvs::canvas_blocks::portY $y $height $index $count]
+        if {$compactVirtual} {
+            set rowY [expr {$y + ($height / 2.0)}]
+        } else {
+            set rowY [::svvs::canvas_blocks::portY $y $height $index $count]
+        }
 
         if {$direction eq "input"} {
-            set px $x
-            set tx [expr {$x + 18}]
+            set px [expr {$compactVirtual ? $x + $portRadius : $x}]
+            set tx [expr {$x + [::svvs::theme::scale 18]}]
             set anchor w
             set color [::svvs::theme::color portIn]
         } else {
-            set px [expr {$x + $width}]
-            set tx [expr {$x + $width - 18}]
+            set px [expr {$compactVirtual ? $x + $width - $portRadius : $x + $width}]
+            set tx [expr {$x + $width - [::svvs::theme::scale 18]}]
             set anchor e
             set color [::svvs::theme::color portOut]
         }
@@ -369,7 +400,8 @@ proc ::svvs::canvas_blocks::layoutPorts {id ports direction x y width height} {
         foreach item [$canvas find withtag $pTag] {
             set tags [$canvas gettags $item]
             if {[lsearch -exact $tags "port"] >= 0} {
-                $canvas coords $item [expr {$px - 5}] [expr {$rowY - 5}] [expr {$px + 5}] [expr {$rowY + 5}]
+                $canvas coords $item [expr {$px - $portRadius}] [expr {$rowY - $portRadius}] \
+                    [expr {$px + $portRadius}] [expr {$rowY + $portRadius}]
                 $canvas itemconfigure $item -fill $color -outline $color
             } elseif {[lsearch -exact $tags "port-label"] >= 0} {
                 $canvas coords $item $tx $rowY
@@ -408,8 +440,8 @@ proc ::svvs::canvas_blocks::addModuleAtVisibleCenter {module} {
         return
     }
 
-    set x [$canvas canvasx [expr {[winfo width $canvas] / 2 - 110}]]
-    set y [$canvas canvasy [expr {[winfo height $canvas] / 2 - 70}]]
+    set x [$canvas canvasx [expr {[winfo width $canvas] / 2 - [::svvs::theme::scale 110]}]]
+    set y [$canvas canvasy [expr {[winfo height $canvas] / 2 - [::svvs::theme::scale 70]}]]
     ::svvs::canvas_blocks::drawBlock [::svvs::canvas_blocks::nextInstanceModule $module] $x $y
 }
 
@@ -423,6 +455,7 @@ proc ::svvs::canvas_blocks::nextInstanceModule {module} {
 proc ::svvs::canvas_blocks::onPress {x y} {
     variable canvas
     variable selectedTag
+    variable selectedTags
     variable dragTag
     variable resizeTag
     variable dragLastX
@@ -436,6 +469,7 @@ proc ::svvs::canvas_blocks::onPress {x y} {
     if {$hitKind eq "resize"} {
         set handleTag $hitTag
         set selectedTag $handleTag
+        set selectedTags {}
         set resizeTag $handleTag
         set dragLastX $x
         set dragLastY $y
@@ -454,19 +488,22 @@ proc ::svvs::canvas_blocks::onPress {x y} {
     if {$hitKind eq "block"} {
         set blockTag $hitTag
         set selectedTag $blockTag
+        if {[lsearch -exact $selectedTags $blockTag] < 0} {
+            set selectedTags [list $blockTag]
+        }
         set dragTag $blockTag
         set dragLastX $x
         set dragLastY $y
         ::svvs::canvas_blocks::paintSelection
-        ::svvs::canvas_blocks::showBlockProperties $blockTag
+        ::svvs::canvas_blocks::showSelectionProperties
     } elseif {$hitKind eq "connection" && [::svvs::canvas_connections::selectAt $x $y]} {
         set dragTag ""
         set resizeTag ""
+        set selectedTags {}
         ::svvs::canvas_connections::beginRouteDragAt $selectedTag $x $y
     } else {
         ::svvs::canvas_connections::cancelPending
-        ::svvs::canvas_blocks::clearSelection
-        ::svvs::canvas_blocks::panStart $x $y
+        ::svvs::canvas_blocks::beginBoxSelection $x $y
     }
 }
 
@@ -477,9 +514,15 @@ proc ::svvs::canvas_blocks::onDrag {x y} {
     variable dragLastX
     variable dragLastY
     variable viewportPanning
+    variable boxSelecting
 
     if {$viewportPanning} {
         ::svvs::canvas_blocks::panMove $x $y
+        return
+    }
+
+    if {$boxSelecting} {
+        ::svvs::canvas_blocks::updateBoxSelection $x $y
         return
     }
 
@@ -504,8 +547,7 @@ proc ::svvs::canvas_blocks::onDrag {x y} {
 
     set dx [expr {$x - $dragLastX}]
     set dy [expr {$y - $dragLastY}]
-    $canvas move $dragTag $dx $dy
-    ::svvs::canvas_blocks::moveBlockData $dragTag $dx $dy
+    ::svvs::canvas_blocks::moveSelectedBlocks $dragTag $dx $dy
     set dragLastX $x
     set dragLastY $y
     ::svvs::canvas_connections::refreshAll
@@ -516,8 +558,13 @@ proc ::svvs::canvas_blocks::onRelease {x y} {
     variable dragTag
     variable resizeTag
     variable viewportPanning
+    variable boxSelecting
     if {$viewportPanning} {
         ::svvs::canvas_blocks::panEnd
+        return
+    }
+    if {$boxSelecting} {
+        ::svvs::canvas_blocks::finishBoxSelection $x $y
         return
     }
     if {$resizeTag ne ""} {
@@ -529,6 +576,126 @@ proc ::svvs::canvas_blocks::onRelease {x y} {
     ::svvs::canvas_connections::endRouteDrag
     set dragTag ""
     set resizeTag ""
+}
+
+proc ::svvs::canvas_blocks::beginBoxSelection {x y} {
+    variable canvas
+    variable selectedTag
+    variable selectedTags
+    variable boxSelecting
+    variable boxMoved
+    variable boxStartX
+    variable boxStartY
+    variable boxRect
+
+    set selectedTag ""
+    set selectedTags {}
+    ::svvs::canvas_blocks::paintSelection
+    ::svvs::properties_panel::showWelcome
+
+    set boxSelecting 1
+    set boxMoved 0
+    set boxStartX [$canvas canvasx $x]
+    set boxStartY [$canvas canvasy $y]
+    catch {$canvas delete selection-box}
+    set boxRect [$canvas create rectangle $boxStartX $boxStartY $boxStartX $boxStartY \
+        -outline [::svvs::theme::color accentHover] \
+        -width [::svvs::theme::scale 1] \
+        -dash [list [::svvs::theme::scale 4] [::svvs::theme::scale 3]] \
+        -tags [list selection-box]]
+}
+
+proc ::svvs::canvas_blocks::updateBoxSelection {x y} {
+    variable canvas
+    variable boxMoved
+    variable boxStartX
+    variable boxStartY
+    variable boxRect
+
+    if {$boxRect eq ""} {
+        return
+    }
+    set cx [$canvas canvasx $x]
+    set cy [$canvas canvasy $y]
+    if {abs($cx - $boxStartX) > [::svvs::theme::scale 3] ||
+        abs($cy - $boxStartY) > [::svvs::theme::scale 3]} {
+        set boxMoved 1
+    }
+    $canvas coords $boxRect $boxStartX $boxStartY $cx $cy
+}
+
+proc ::svvs::canvas_blocks::finishBoxSelection {x y} {
+    variable canvas
+    variable selectedTag
+    variable selectedTags
+    variable boxSelecting
+    variable boxMoved
+    variable boxStartX
+    variable boxStartY
+    variable boxRect
+
+    set boxSelecting 0
+    set cx [$canvas canvasx $x]
+    set cy [$canvas canvasy $y]
+    set x1 [expr {min($boxStartX, $cx)}]
+    set y1 [expr {min($boxStartY, $cy)}]
+    set x2 [expr {max($boxStartX, $cx)}]
+    set y2 [expr {max($boxStartY, $cy)}]
+    if {$boxRect ne ""} {
+        catch {$canvas delete $boxRect}
+        set boxRect ""
+    }
+
+    if {!$boxMoved} {
+        set selectedTag ""
+        set selectedTags {}
+        ::svvs::canvas_blocks::paintSelection
+        ::svvs::properties_panel::showWelcome
+        return
+    }
+
+    set selectedTags [::svvs::canvas_blocks::blocksInBox $x1 $y1 $x2 $y2]
+    if {[llength $selectedTags] > 0} {
+        set selectedTag [lindex $selectedTags 0]
+        ::svvs::canvas_blocks::showSelectionProperties
+        ::svvs::console::log "Blocos selecionados: [llength $selectedTags]"
+    } else {
+        set selectedTag ""
+        ::svvs::properties_panel::showWelcome
+    }
+    ::svvs::canvas_blocks::paintSelection
+}
+
+proc ::svvs::canvas_blocks::blocksInBox {x1 y1 x2 y2} {
+    variable canvas
+    set result {}
+    foreach item [$canvas find overlapping $x1 $y1 $x2 $y2] {
+        set tags [$canvas gettags $item]
+        if {[lsearch -exact $tags "block-body"] < 0} {
+            continue
+        }
+        set blockTag [::svvs::canvas_blocks::findTag $tags "block:"]
+        if {$blockTag ne "" && [lsearch -exact $result $blockTag] < 0} {
+            lappend result $blockTag
+        }
+    }
+    return $result
+}
+
+proc ::svvs::canvas_blocks::moveSelectedBlocks {fallbackTag dx dy} {
+    variable canvas
+    variable selectedTags
+    set targets $selectedTags
+    if {[llength $targets] == 0} {
+        set targets [list $fallbackTag]
+    }
+    foreach blockTag $targets {
+        if {![string match "block:*" $blockTag]} {
+            continue
+        }
+        $canvas move $blockTag $dx $dy
+        ::svvs::canvas_blocks::moveBlockData $blockTag $dx $dy
+    }
 }
 
 proc ::svvs::canvas_blocks::moveBlockData {blockTag dx dy} {
@@ -550,11 +717,11 @@ proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
     set module [dict get $blocks($id) module]
     set kind [::svvs::simulation_components::kind $module]
     if {$kind in {input probe}} {
-        set minWidth 44
-        set minHeight 44
+        set minWidth [::svvs::theme::scale 44]
+        set minHeight [::svvs::theme::scale 44]
     } else {
-        set minWidth 140
-        set minHeight 70
+        set minWidth [::svvs::theme::scale 140]
+        set minHeight [::svvs::theme::scale 70]
     }
     set width [expr {max($minWidth, [dict get $blocks($id) width] + $dx)}]
     set height [expr {max($minHeight, [dict get $blocks($id) height] + $dy)}]
@@ -595,8 +762,8 @@ proc ::svvs::canvas_blocks::keyboardZoom {direction} {
 proc ::svvs::canvas_blocks::keyboardPan {dx dy} {
     variable canvas
     if {$canvas eq "" || ![winfo exists $canvas]} { return }
-    if {$dx != 0} { $canvas xview scroll $dx units }
-    if {$dy != 0} { $canvas yview scroll $dy units }
+    if {$dx != 0} { $canvas xview scroll [::svvs::theme::scale $dx] units }
+    if {$dy != 0} { $canvas yview scroll [::svvs::theme::scale $dy] units }
 }
 
 proc ::svvs::canvas_blocks::resetView {} {
@@ -616,12 +783,14 @@ proc ::svvs::canvas_blocks::resetView {} {
 
 proc ::svvs::canvas_blocks::scaledFontSize {base min max} {
     variable zoom
-    set size [expr {int(round($base * $zoom))}]
-    if {$size < $min} {
-        return $min
+    set size [expr {int(round([::svvs::theme::scale $base] * $zoom))}]
+    set scaledMin [::svvs::theme::scale $min]
+    set scaledMax [::svvs::theme::scale $max]
+    if {$size < $scaledMin} {
+        return $scaledMin
     }
-    if {$size > $max} {
-        return $max
+    if {$size > $scaledMax} {
+        return $scaledMax
     }
     return $size
 }
@@ -700,7 +869,7 @@ proc ::svvs::canvas_blocks::setSimplifiedBlockStyle {enabled} {
                     $canvas itemconfigure $item -anchor center
                 } else {
                     if {[llength $headerCoords] == 4} {
-                        set titleX [expr {[lindex $headerCoords 0] + (12.0 * $zoom)}]
+                        set titleX [expr {[lindex $headerCoords 0] + ([::svvs::theme::scale 12] * $zoom)}]
                         set titleY [expr {([lindex $headerCoords 1] + [lindex $headerCoords 3]) / 2.0}]
                     } else {
                         set titleX [expr {$x1 + (12.0 * $zoom)}]
@@ -890,7 +1059,9 @@ proc ::svvs::canvas_blocks::portCenter {portTag} {
 
 proc ::svvs::canvas_blocks::selectPort {portTag} {
     variable selectedTag
+    variable selectedTags
     set selectedTag $portTag
+    set selectedTags {}
     ::svvs::canvas_blocks::paintSelection
     set info [::svvs::canvas_blocks::portInfo $portTag]
     ::svvs::properties_panel::showPort [dict get $info module] [dict get $info port]
@@ -903,15 +1074,37 @@ proc ::svvs::canvas_blocks::showBlockProperties {blockTag} {
     ::svvs::console::log "Bloco selecionado: [dict get $module instance]"
 }
 
+proc ::svvs::canvas_blocks::showSelectionProperties {} {
+    variable selectedTags
+    if {[llength $selectedTags] == 1} {
+        ::svvs::canvas_blocks::showBlockProperties [lindex $selectedTags 0]
+        return
+    }
+    set lines [list \
+        "Type: Multiple Selection" \
+        "Blocks: [llength $selectedTags]" \
+        "" \
+        "Selected instances:"]
+    foreach blockTag $selectedTags {
+        if {[catch {set module [::svvs::canvas_blocks::moduleForBlockTag $blockTag]}]} {
+            continue
+        }
+        lappend lines "  [dict get $module instance]"
+    }
+    ::svvs::properties_panel::setText [join $lines "\n"]
+}
+
 proc ::svvs::canvas_blocks::paintSelection {} {
     variable canvas
     variable selectedTag
+    variable selectedTags
 
     foreach item [$canvas find withtag block-body] {
-        $canvas itemconfigure $item -outline [::svvs::theme::color border] -width 1
+        $canvas itemconfigure $item -outline [::svvs::theme::color border] \
+            -width [::svvs::theme::scale 1]
     }
     foreach item [$canvas find withtag port] {
-        $canvas itemconfigure $item -width 1
+        $canvas itemconfigure $item -width [::svvs::theme::scale 1]
     }
     foreach item [$canvas find withtag resize-handle] {
         $canvas itemconfigure $item -fill [::svvs::theme::color border]
@@ -926,23 +1119,32 @@ proc ::svvs::canvas_blocks::paintSelection {} {
         return
     }
 
-    foreach item [$canvas find withtag $selectedTag] {
+    set tagsToPaint $selectedTags
+    if {[llength $tagsToPaint] == 0} {
+        set tagsToPaint [list $selectedTag]
+    }
+    foreach tagToPaint $tagsToPaint {
+        foreach item [$canvas find withtag $tagToPaint] {
         set tags [$canvas gettags $item]
         if {[lsearch -exact $tags "block-body"] >= 0} {
-            $canvas itemconfigure $item -outline [::svvs::theme::color accent] -width 2
+            $canvas itemconfigure $item -outline [::svvs::theme::color accent] \
+                -width [::svvs::theme::scale 2]
         }
         if {[lsearch -exact $tags "port"] >= 0} {
-            $canvas itemconfigure $item -outline white -width 2
+            $canvas itemconfigure $item -outline white -width [::svvs::theme::scale 2]
         }
         if {[lsearch -exact $tags "resize-handle"] >= 0} {
             $canvas itemconfigure $item -fill [::svvs::theme::color accent]
+        }
         }
     }
 }
 
 proc ::svvs::canvas_blocks::clearSelection {} {
     variable selectedTag
+    variable selectedTags
     set selectedTag ""
+    set selectedTags {}
     ::svvs::canvas_blocks::paintSelection
     ::svvs::properties_panel::showWelcome
 }
@@ -965,6 +1167,23 @@ proc ::svvs::canvas_blocks::removeBlockData {blockTag} {
 proc ::svvs::canvas_blocks::deleteSelected {} {
     variable canvas
     variable selectedTag
+    variable selectedTags
+
+    if {[llength $selectedTags] > 0} {
+        foreach blockTag $selectedTags {
+            if {![string match "block:*" $blockTag]} {
+                continue
+            }
+            ::svvs::canvas_connections::removeForBlock $blockTag
+            $canvas delete $blockTag
+            ::svvs::canvas_blocks::removeBlockData $blockTag
+        }
+        ::svvs::console::log "Blocos removidos: [llength $selectedTags]"
+        set selectedTag ""
+        set selectedTags {}
+        ::svvs::properties_panel::showWelcome
+        return
+    }
 
     if {$selectedTag eq ""} {
         return
@@ -980,10 +1199,21 @@ proc ::svvs::canvas_blocks::deleteSelected {} {
         ::svvs::console::log "Conexao removida."
     }
     set selectedTag ""
+    set selectedTags {}
     ::svvs::properties_panel::showWelcome
 }
 
 proc ::svvs::canvas_blocks::cancelAction {} {
+    variable canvas
+    variable boxSelecting
+    variable boxMoved
+    variable boxRect
+    if {$boxRect ne "" && $canvas ne "" && [winfo exists $canvas]} {
+        catch {$canvas delete $boxRect}
+    }
+    set boxSelecting 0
+    set boxMoved 0
+    set boxRect ""
     ::svvs::canvas_connections::cancel
     ::svvs::console::log "Acao cancelada."
 }

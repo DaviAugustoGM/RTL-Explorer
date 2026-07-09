@@ -114,13 +114,16 @@ proc ::svvs::diagram_simulation::redraw {} {
     if {$canvas eq "" || ![winfo exists $canvas]} { return }
     $canvas delete simulation-overlay
 
-    set hx [$canvas canvasx 16]
-    set hy [$canvas canvasy 16]
-    $canvas create rectangle $hx $hy [expr {$hx + 118}] [expr {$hy + 27}] \
+    set hx [$canvas canvasx [::svvs::theme::scale 16]]
+    set hy [$canvas canvasy [::svvs::theme::scale 16]]
+    $canvas create rectangle $hx $hy \
+        [expr {$hx + [::svvs::theme::scale 118]}] [expr {$hy + [::svvs::theme::scale 27]}] \
         -fill #244b3a -outline [::svvs::theme::color success] \
         -tags {simulation-overlay simulation-hud}
-    $canvas create text [expr {$hx + 59}] [expr {$hy + 14}] -text "SIMULATION ACTIVE" \
-        -fill #dff4e6 -font {{Segoe UI} 8 bold} -tags {simulation-overlay simulation-hud}
+    $canvas create text [expr {$hx + [::svvs::theme::scale 59]}] \
+        [expr {$hy + [::svvs::theme::scale 14]}] -text "SIMULATION ACTIVE" \
+        -fill #dff4e6 -font [::svvs::theme::font "Segoe UI" 8 bold] \
+        -tags {simulation-overlay simulation-hud}
 
     if {[dict exists $model signalBlocks]} {
         foreach item [dict get $model signalBlocks] {
@@ -175,13 +178,16 @@ proc ::svvs::diagram_simulation::drawBadge {record signal editable} {
     set width [dict get $signal width]
     set color [::svvs::diagram_simulation::valueColor $value]
     set direction [dict get [dict get $record port] direction]
-    set cx [expr {$direction eq "input" ? $px - 30 : $px + 30}]
+    set cx [expr {$direction eq "input" ? $px - [::svvs::theme::scale 30] : $px + [::svvs::theme::scale 30]}]
     set badgeTag "simulation-value:$name"
     set display [expr {$width > 1 ? "$value" : $value}]
-    $canvas create rectangle [expr {$cx - 22}] [expr {$py - 11}] \
-        [expr {$cx + 22}] [expr {$py + 11}] -fill [::svvs::theme::color panelAlt] \
-        -outline $color -width 2 -tags [list simulation-overlay $badgeTag]
-    $canvas create text $cx $py -text $display -fill white -font {{Cascadia Mono} 9 bold} \
+    $canvas create rectangle [expr {$cx - [::svvs::theme::scale 22]}] \
+        [expr {$py - [::svvs::theme::scale 11]}] \
+        [expr {$cx + [::svvs::theme::scale 22]}] \
+        [expr {$py + [::svvs::theme::scale 11]}] -fill [::svvs::theme::color panelAlt] \
+        -outline $color -width [::svvs::theme::scale 2] -tags [list simulation-overlay $badgeTag]
+    $canvas create text $cx $py -text $display -fill white \
+        -font [::svvs::theme::font "Cascadia Mono" 9 bold] \
         -tags [list simulation-overlay $badgeTag]
     if {$editable} {
         set script [list ::svvs::diagram_simulation::editInput $name $width]
@@ -210,9 +216,12 @@ proc ::svvs::diagram_simulation::editInput {name width} {
     ttk::label .simulationInput.name -text "$name (${width} bits)" -style Panel.TLabel
     ttk::entry .simulationInput.value -textvariable ::svvs::diagram_simulation::editValue -width 18
     ttk::button .simulationInput.apply -text "Apply" -command ::svvs::diagram_simulation::commitInput
-    grid .simulationInput.name -row 0 -column 0 -columnspan 2 -sticky w -padx 14 -pady {14 8}
-    grid .simulationInput.value -row 1 -column 0 -padx {14 8} -pady {0 14}
-    grid .simulationInput.apply -row 1 -column 1 -padx {0 14} -pady {0 14}
+    grid .simulationInput.name -row 0 -column 0 -columnspan 2 -sticky w \
+        -padx [::svvs::theme::scale 14] -pady [::svvs::theme::scaleList {14 8}]
+    grid .simulationInput.value -row 1 -column 0 \
+        -padx [::svvs::theme::scaleList {14 8}] -pady [::svvs::theme::scaleList {0 14}]
+    grid .simulationInput.apply -row 1 -column 1 \
+        -padx [::svvs::theme::scaleList {0 14}] -pady [::svvs::theme::scaleList {0 14}]
     bind .simulationInput.value <Return> {::svvs::diagram_simulation::commitInput}
     focus .simulationInput.value
     .simulationInput.value selection range 0 end
