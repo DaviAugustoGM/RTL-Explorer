@@ -134,6 +134,7 @@ proc ::svvs::layout::showFileMenu {widget} {
     .fileMenu add separator
     .fileMenu add command -label "Open Files" -command {::svvs::layout::openFiles}
     .fileMenu add command -label "Open Folder" -command {::svvs::layout::openFolder}
+    .fileMenu add command -label "Samples" -command {::svvs::layout::openSamples}
     .fileMenu add separator
     .fileMenu add command -label "Save Project" -command {::svvs::layout::saveProject}
     menu .fileMenu.valueMaps -tearoff 0 \
@@ -201,7 +202,10 @@ proc ::svvs::layout::openFolder {} {
     if {$dir eq ""} {
         return
     }
+    ::svvs::layout::openFolderPath $dir
+}
 
+proc ::svvs::layout::openFolderPath {dir} {
     set files [::svvs::layout::findSystemVerilogFiles $dir]
     if {[llength $files] == 0} {
         ::svvs::console::log "Nenhum arquivo Verilog/SystemVerilog encontrado em: $dir" warn
@@ -212,6 +216,27 @@ proc ::svvs::layout::openFolder {} {
     ::svvs::project_tree::loadProjectFiles $files [file tail $dir]
     ::svvs::console::log "Pasta carregada: $dir"
     ::svvs::console::log "Arquivos Verilog/SystemVerilog encontrados: [llength $files]" ok
+}
+
+proc ::svvs::layout::sampleDirectory {} {
+    foreach dir [list \
+        [file join [file dirname $::APP_DIR] sample] \
+        [file join $::APP_DIR sample] \
+        [file join [pwd] sample]] {
+        if {[file isdirectory $dir]} {
+            return [file normalize $dir]
+        }
+    }
+    return ""
+}
+
+proc ::svvs::layout::openSamples {} {
+    set dir [::svvs::layout::sampleDirectory]
+    if {$dir eq ""} {
+        ::svvs::console::log "Pasta sample nao encontrada." error
+        return
+    }
+    ::svvs::layout::openFolderPath $dir
 }
 
 proc ::svvs::layout::openFiles {} {
