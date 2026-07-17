@@ -348,8 +348,6 @@ proc ::svvs::project_tree::showBlockLibrary {} {
     set builtinFolder [$widget insert $root end -text "Built-in blocks" -open 1 -image $folderIcon]
     set sourcesFolder [$widget insert $builtinFolder end -text "Sources" -open 1 -image $folderIcon]
     set simulationFolder [$widget insert $builtinFolder end -text "Simulation I/O" -open 1 -image $folderIcon]
-    set logicFolder [$widget insert $builtinFolder end -text "Logic" -open 1 -image $folderIcon]
-    set storageFolder [$widget insert $builtinFolder end -text "Storage" -open 1 -image $folderIcon]
 
     foreach module $sampleModules {
         ::svvs::project_tree::addLibraryItem $userFolder $module
@@ -360,12 +358,6 @@ proc ::svvs::project_tree::showBlockLibrary {} {
     }
     foreach module [::svvs::project_tree::builtinModules simulation] {
         ::svvs::project_tree::addLibraryItem $simulationFolder $module
-    }
-    foreach module [::svvs::project_tree::builtinModules logic] {
-        ::svvs::project_tree::addLibraryItem $logicFolder $module
-    }
-    foreach module [::svvs::project_tree::builtinModules storage] {
-        ::svvs::project_tree::addLibraryItem $storageFolder $module
     }
 
     ::svvs::console::log "Biblioteca de blocos pronta. Arraste um item para o canvas ou use duplo clique."

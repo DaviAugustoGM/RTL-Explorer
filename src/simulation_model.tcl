@@ -165,7 +165,7 @@ proc ::svvs::simulation_model::diagramModel {} {
             set module [dict get $first module]
             set port [dict get $first port]
             set external [::svvs::simulation_model::safeName \
-                "[dict get $module instance]__[dict get $port name]"]
+                "[dict get $module instance]__[dict get $first block]__[dict get $port name]"]
             set inputName $external
             set inputData [dict create name $external width $width net $netName members $members]
             if {[llength $virtualSources] > 0} {
@@ -195,7 +195,7 @@ proc ::svvs::simulation_model::diagramModel {} {
             set module [dict get $driver module]
             set port [dict get $driver port]
             set external [::svvs::simulation_model::safeName \
-                "[dict get $module instance]__[dict get $port name]"]
+                "[dict get $module instance]__[dict get $driver block]__[dict get $port name]"]
             lappend outputs [dict create name $external width $width net $netName source $driver]
             if {$outputName eq ""} { set outputName $external }
         }

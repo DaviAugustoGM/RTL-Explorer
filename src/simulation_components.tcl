@@ -79,7 +79,7 @@ proc ::svvs::simulation_components::configuredSignalModule {kind portName width}
         lappend updatedPorts $port
     }
     dict set module ports $updatedPorts
-    return [::svvs::canvas_blocks::nextInstanceModule $module]
+    return $module
 }
 
 proc ::svvs::simulation_components::clockPortName {name width} {
@@ -103,6 +103,35 @@ proc ::svvs::simulation_components::autoIoForSelected {mode} {
     return [::svvs::simulation_components::autoIoForBlock $blockId $mode]
 }
 
+proc ::svvs::simulation_components::autoIoPositionRows {items minGap} {
+    set sorted [lsort -real -index 0 $items]
+    set rows {}
+    if {[llength $sorted] == 0} {
+        return $rows
+    }
+    foreach item $sorted {
+        set desiredY [lindex $item 0]
+        set y $desiredY
+        if {[llength $rows] > 0} {
+            set previous [lindex [lindex $rows end] 0]
+            set y [expr {max($desiredY, $previous + $minGap)}]
+        }
+        lappend rows [list $y [lrange $item 1 end]]
+    }
+
+    set desiredCenter [expr {([lindex [lindex $sorted 0] 0] + [lindex [lindex $sorted end] 0]) / 2.0}]
+    set packedCenter [expr {([lindex [lindex $rows 0] 0] + [lindex [lindex $rows end] 0]) / 2.0}]
+    set shift [expr {$desiredCenter - $packedCenter}]
+    if {$shift != 0} {
+        set shifted {}
+        foreach row $rows {
+            lappend shifted [list [expr {[lindex $row 0] + $shift}] [lindex $row 1]]
+        }
+        set rows $shifted
+    }
+    return $rows
+}
+
 proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
     if {![info exists ::svvs::canvas_blocks::blocks($blockId)]} {
         return 0
@@ -115,12 +144,20 @@ proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
     }
 
     set x [dict get $targetBlock x]
-    set y [dict get $targetBlock y]
     set width [dict get $targetBlock width]
+    set zoom $::svvs::canvas_blocks::zoom
+    set inputX [expr {$x - ([::svvs::theme::scale 92] * $zoom)}]
+    set outputX [expr {$x + $width + ([::svvs::theme::scale 28] * $zoom)}]
+    set signalHeight [expr {[::svvs::theme::scale 44] * $zoom}]
+    set blockYOffset [expr {$signalHeight / 2.0}]
+    set rowGap [expr {$signalHeight + ([::svvs::theme::scale 20] * $zoom)}]
+    set inputItems {}
+    set outputItems {}
     set inputCount 0
     set clockCount 0
     set outputCount 0
     set created 0
+
     foreach port [dict get $targetModule ports] {
         set direction [dict get $port direction]
         set portName [dict get $port name]
@@ -144,31 +181,42 @@ proc ::svvs::simulation_components::autoIoForBlock {blockId mode} {
             set module [::svvs::simulation_components::configuredSignalModule \
                 $sourceKind $portName $portWidth]
             if {$module eq ""} { continue }
-            set signalX [expr {$x - [::svvs::theme::scale 92]}]
-            set signalY [expr {$portY - [::svvs::theme::scale 22]}]
-            set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
-            if {$sourceKind eq "clock"} {
-                ::svvs::canvas_connections::drawConnection "port:$newId:clk" $portTag $portWidth
-                incr clockCount
-            } else {
-                ::svvs::canvas_connections::drawConnection "port:$newId:out" $portTag $portWidth
-                incr inputCount
-            }
-            incr created
+            lappend inputItems [list $portY $module $sourceKind $portTag $portWidth]
         } elseif {$direction eq "output" && $mode in {outputs both}} {
             if {[::svvs::simulation_components::portConnectedToKind $portTag probe]} {
                 continue
             }
             set module [::svvs::simulation_components::configuredSignalModule probe $portName $portWidth]
             if {$module eq ""} { continue }
-            set signalX [expr {$x + $width + [::svvs::theme::scale 28]}]
-            set signalY [expr {$portY - [::svvs::theme::scale 22]}]
-            set newId [::svvs::canvas_blocks::drawBlock $module $signalX $signalY]
-            ::svvs::canvas_connections::drawConnection $portTag "port:$newId:in" $portWidth
-            incr outputCount
-            incr created
+            lappend outputItems [list $portY $module probe $portTag $portWidth]
         }
     }
+
+    foreach row [::svvs::simulation_components::autoIoPositionRows $inputItems $rowGap] {
+        set signalY [expr {[lindex $row 0] - $blockYOffset}]
+        lassign [lindex $row 1] module sourceKind portTag portWidth
+        set module [::svvs::canvas_blocks::nextInstanceModule $module]
+        set newId [::svvs::canvas_blocks::drawBlock $module $inputX $signalY]
+        if {$sourceKind eq "clock"} {
+            ::svvs::canvas_connections::drawConnection "port:$newId:clk" $portTag $portWidth
+            incr clockCount
+        } else {
+            ::svvs::canvas_connections::drawConnection "port:$newId:out" $portTag $portWidth
+            incr inputCount
+        }
+        incr created
+    }
+
+    foreach row [::svvs::simulation_components::autoIoPositionRows $outputItems $rowGap] {
+        set signalY [expr {[lindex $row 0] - $blockYOffset}]
+        lassign [lindex $row 1] module sourceKind portTag portWidth
+        set module [::svvs::canvas_blocks::nextInstanceModule $module]
+        set newId [::svvs::canvas_blocks::drawBlock $module $outputX $signalY]
+        ::svvs::canvas_connections::drawConnection $portTag "port:$newId:in" $portWidth
+        incr outputCount
+        incr created
+    }
+
     ::svvs::canvas_connections::refreshAll
     if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
     if {$created == 0} {
@@ -266,6 +314,59 @@ proc ::svvs::simulation_components::displayName {module} {
     return [dict get $module instance]
 }
 
+proc ::svvs::simulation_components::clipDisplayText {text maxChars} {
+    set maxChars [expr {int($maxChars)}]
+    set length [string length $text]
+    if {$length <= $maxChars} { return $text }
+    if {$maxChars <= 0} { return "" }
+    if {$maxChars <= 3} {
+        return [string range $text 0 [expr {$maxChars - 1}]]
+    }
+
+    if {[regexp -nocase {^(0b|0x)} $text -> prefix] && $maxChars >= 7} {
+        set suffixCount [expr {$maxChars - [string length $prefix] - 3}]
+        if {$suffixCount < 1} {
+            return "${prefix}..."
+        }
+        return "${prefix}...[string range $text end-[expr {$suffixCount - 1}] end]"
+    }
+
+    return "[string range $text 0 [expr {$maxChars - 4}]]..."
+}
+
+proc ::svvs::simulation_components::componentFontInfo {id text} {
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} {
+        return [list $text [::svvs::theme::scale 10]]
+    }
+
+    set block $::svvs::canvas_blocks::blocks($id)
+    set width [dict get $block width]
+    set height [dict get $block height]
+    set zoom $::svvs::canvas_blocks::zoom
+    set margin [expr {max([::svvs::theme::scale 8], [::svvs::theme::scale 10] * $zoom)}]
+    set available [expr {max([::svvs::theme::scale 10], $width - $margin)}]
+    set minSize [::svvs::theme::scale 5]
+    set maxSize [::svvs::theme::scale 24]
+    set target [expr {int(round([::svvs::theme::scale 12] * $zoom))}]
+    set heightLimit [expr {int(max($minSize, $height * 0.48))}]
+    set fontSize [expr {min($maxSize, max($minSize, min($target, $heightLimit)))}]
+    set maxChars [expr {int($available / max(1.0, $fontSize * 0.62))}]
+    set clipped [::svvs::simulation_components::clipDisplayText $text $maxChars]
+
+    set length [string length $clipped]
+    if {$length > 0} {
+        set fitSize [expr {int($available / max(1.0, $length * 0.62))}]
+        set fontSize [expr {min($fontSize, max($minSize, $fitSize))}]
+    }
+    return [list $clipped $fontSize]
+}
+
+proc ::svvs::simulation_components::componentLabelFontSize {} {
+    set zoom $::svvs::canvas_blocks::zoom
+    set size [expr {int(round([::svvs::theme::scale 8] * $zoom))}]
+    return [expr {max([::svvs::theme::scale 5], min([::svvs::theme::scale 12], $size))}]
+}
+
 proc ::svvs::simulation_components::setPortWidth {portTag width} {
     if {![regexp {^port:([^:]+):(.+)$} $portTag -> id portName]} { return }
     if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
@@ -298,7 +399,7 @@ proc ::svvs::simulation_components::decorateBlock {id} {
     set tag "block:$id"
     foreach item [$canvas find withtag $tag] {
         set tags [$canvas gettags $item]
-        if {[lsearch -exact $tags resize-handle] >= 0 && $kind in {input probe}} {
+        if {[lsearch -exact $tags resize-handle] >= 0 && $kind in {input probe clock}} {
             $canvas dtag $item simulation-hidden
             $canvas itemconfigure $item -state normal
         } elseif {[lsearch -exact $tags block-header] >= 0 ||
@@ -336,10 +437,11 @@ proc ::svvs::simulation_components::layoutDecoration {id} {
     set y [dict get $block y]
     set width [dict get $block width]
     set height [dict get $block height]
+    set zoom $::svvs::canvas_blocks::zoom
     $::svvs::canvas_blocks::canvas coords "simulation-component:$id" \
         [expr {$x + $width / 2.0}] [expr {$y + $height / 2.0}]
     $::svvs::canvas_blocks::canvas coords "simulation-component-label:$id" \
-        [expr {$x + $width / 2.0}] [expr {$y - [::svvs::theme::scale 5]}]
+        [expr {$x + $width / 2.0}] [expr {$y - ([::svvs::theme::scale 5] * $zoom)}]
 }
 
 proc ::svvs::simulation_components::updateNameDisplay {id} {
@@ -349,6 +451,7 @@ proc ::svvs::simulation_components::updateNameDisplay {id} {
     set canvas $::svvs::canvas_blocks::canvas
     if {$canvas ne "" && [winfo exists $canvas]} {
         $canvas itemconfigure "simulation-component-label:$id" -text $label \
+            -font [list {Segoe UI} [::svvs::simulation_components::componentLabelFontSize]] \
             -state [expr {$label eq "" ? "hidden" : "normal"}]
     }
 }
@@ -413,12 +516,21 @@ proc ::svvs::simulation_components::updateDisplay {id {liveValue ""}} {
     }
     set canvas $::svvs::canvas_blocks::canvas
     if {$canvas ne "" && [winfo exists $canvas]} {
-        set block $::svvs::canvas_blocks::blocks($id)
-        set available [expr {max([::svvs::theme::scale 28], [dict get $block width] - [::svvs::theme::scale 12])}]
-        set length [string length $display]
-        set fontSize [expr {max([::svvs::theme::scale 5], min([::svvs::theme::scale 12], int($available / max(1.0, $length * 0.62))))}]
-        $canvas itemconfigure "simulation-component:$id" -text $display \
+        lassign [::svvs::simulation_components::componentFontInfo $id $display] visible fontSize
+        $canvas itemconfigure "simulation-component:$id" -text $visible \
             -font [list {Cascadia Mono} $fontSize bold]
+    }
+}
+
+proc ::svvs::simulation_components::refreshAllDisplays {} {
+    foreach id [array names ::svvs::canvas_blocks::blocks] {
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        if {![::svvs::simulation_components::isVirtual $module]} {
+            continue
+        }
+        ::svvs::simulation_components::layoutDecoration $id
+        ::svvs::simulation_components::updateDisplay $id
+        ::svvs::simulation_components::updateNameDisplay $id
     }
 }
 

@@ -52,7 +52,10 @@ function Copy-OssCadRuntime([string]$Source, [string]$Destination) {
     New-Item -ItemType Directory -Force $Destination | Out-Null
 
     $BinDestination = Join-Path $Destination 'bin'
-    foreach ($name in @('iverilog.exe', 'libvvp-1.dll', 'vvp.exe', 'yosys.exe', 'yosys-abc.exe')) {
+    New-Item -ItemType Directory -Force $BinDestination | Out-Null
+    Get-ChildItem (Join-Path $Source 'bin') -File -Filter '*.dll' |
+        Copy-Item -Destination $BinDestination -Force
+    foreach ($name in @('iverilog.exe', 'vvp.exe', 'yosys.exe', 'yosys-abc.exe')) {
         Copy-FileToDirectory (Join-Path $Source "bin\$name") $BinDestination
     }
 
@@ -89,17 +92,25 @@ function Remove-StageItem([string]$Path) {
     }
 }
 
+function Remove-CacheItem([string]$Path) {
+    $FullPath = [IO.Path]::GetFullPath($Path)
+    $CacheRoot = [IO.Path]::GetFullPath($Cache)
+    if (-not $FullPath.StartsWith($CacheRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to remove a path outside download cache: $FullPath"
+    }
+    if (Test-Path -LiteralPath $FullPath) {
+        Remove-Item -LiteralPath $FullPath -Recurse -Force
+    }
+}
+
 function Reduce-OssCadRuntime([string]$Root) {
     foreach ($name in @('examples', 'include')) {
         Remove-StageItem (Join-Path $Root $name)
     }
 
-    $RequiredBins = @(
-        'iverilog.exe', 'libvvp-1.dll', 'vvp.exe',
-        'yosys.exe', 'yosys-abc.exe'
-    )
+    $RequiredBins = @('iverilog.exe', 'vvp.exe', 'yosys.exe', 'yosys-abc.exe')
     Get-ChildItem (Join-Path $Root 'bin') -File |
-        Where-Object { $_.Name -notin $RequiredBins } |
+        Where-Object { $_.Extension -ne '.dll' -and $_.Name -notin $RequiredBins } |
         Remove-Item -Force
 
     $Lib = Join-Path $Root 'lib'
@@ -173,18 +184,27 @@ if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalOss 'bin\yosy
 } else {
     $OssInstaller = Join-Path $Cache "oss-cad-suite-windows-x64-$($Versions.OssCadFile).exe"
     $OssExtract = Join-Path $Cache "oss-cad-suite-$($Versions.OssCadFile)"
+    $OssPayload = Join-Path $OssExtract 'oss-cad-suite'
     Get-Download "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$($Versions.OssCad)/oss-cad-suite-windows-x64-$($Versions.OssCadFile).exe" $OssInstaller
-    if (-not (Test-Path -LiteralPath (Join-Path $OssExtract 'oss-cad-suite\bin\yosys.exe'))) {
+    if ((Test-Path -LiteralPath (Join-Path $OssPayload 'bin\yosys.exe')) -and
+        -not (Test-Path -LiteralPath (Join-Path $OssPayload 'lib\libstdc++-6.dll'))) {
+        Write-Warning 'Cached OSS CAD Suite extraction is incomplete. Re-extracting it.'
+        Remove-CacheItem $OssExtract
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $OssPayload 'bin\yosys.exe'))) {
         New-Item -ItemType Directory -Force $OssExtract | Out-Null
         $process = Start-Process -FilePath $OssInstaller -Wait -PassThru -ArgumentList @('-y', "-o$OssExtract")
-        $YosysAfterExtract = Join-Path $OssExtract 'oss-cad-suite\bin\yosys.exe'
+        $YosysAfterExtract = Join-Path $OssPayload 'bin\yosys.exe'
         if ($process.ExitCode -ne 0 -and -not (Test-Path -LiteralPath $YosysAfterExtract)) {
             throw "OSS CAD Suite extraction failed with code $($process.ExitCode)."
         } elseif ($process.ExitCode -ne 0) {
             Write-Warning "OSS CAD Suite extractor returned code $($process.ExitCode), but yosys.exe was extracted. Continuing."
         }
     }
-    Copy-OssCadRuntime (Join-Path $OssExtract 'oss-cad-suite') $OssDestination
+    if (-not (Test-Path -LiteralPath (Join-Path $OssPayload 'lib\libstdc++-6.dll'))) {
+        throw 'OSS CAD Suite extraction is incomplete: lib\libstdc++-6.dll is missing.'
+    }
+    Copy-OssCadRuntime $OssPayload $OssDestination
 }
 Reduce-OssCadRuntime $OssDestination
 
@@ -229,5 +249,17 @@ foreach ($path in $Required) {
     if (-not (Test-Path -LiteralPath (Join-Path $StageDirectory $path))) {
         throw "Incomplete Windows runtime: $path is missing."
     }
+}
+
+$OldPath = $env:PATH
+$OssRoot = Join-Path $StageDirectory 'tools\oss-cad-suite'
+try {
+    $env:PATH = "$(Join-Path $OssRoot 'lib');$(Join-Path $OssRoot 'bin');$OldPath"
+    $YosysCheck = & (Join-Path $OssRoot 'bin\yosys.exe') -V 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Staged yosys.exe failed to start: $YosysCheck"
+    }
+} finally {
+    $env:PATH = $OldPath
 }
 Write-Host "Windows runtime staged at $StageDirectory"

@@ -11,6 +11,10 @@ namespace eval ::svvs::canvas_blocks {
     variable showPortNames 1
     variable dragLastX 0
     variable dragLastY 0
+    variable dragStartX 0
+    variable dragStartY 0
+    variable dragAppliedDX 0
+    variable dragAppliedDY 0
     variable viewportPanning 0
     variable boxSelecting 0
     variable boxMoved 0
@@ -33,9 +37,9 @@ proc ::svvs::canvas_blocks::create {parent} {
         -xscrollincrement 1 \
         -yscrollincrement 1]
 
-    bind $canvas <ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y}
-    bind $canvas <B1-Motion> {::svvs::canvas_blocks::onDrag %x %y}
-    bind $canvas <ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y}
+    bind $canvas <ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y %s}
+    bind $canvas <B1-Motion> {::svvs::canvas_blocks::onDrag %x %y %s}
+    bind $canvas <ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y %s}
     bind $canvas <ButtonPress-3> {::svvs::canvas_connections::showSimplifiedSideMenu %X %Y %x %y}
     bind $canvas <Double-1> {::svvs::simulation_components::onDoubleClick %x %y}
     bind $canvas <MouseWheel> {::svvs::canvas_blocks::onWheel %D %x %y}
@@ -44,9 +48,9 @@ proc ::svvs::canvas_blocks::create {parent} {
     bind $canvas <ButtonPress-2> {::svvs::canvas_blocks::panStart %x %y}
     bind $canvas <B2-Motion> {::svvs::canvas_blocks::panMove %x %y}
     bind $canvas <ButtonRelease-2> {::svvs::canvas_blocks::panEnd}
-    bind $canvas <Shift-ButtonPress-1> {focus %W; ::svvs::canvas_blocks::panStart %x %y; break}
-    bind $canvas <Shift-B1-Motion> {::svvs::canvas_blocks::panMove %x %y; break}
-    bind $canvas <Shift-ButtonRelease-1> {::svvs::canvas_blocks::panEnd; break}
+    bind $canvas <Shift-ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y %s; break}
+    bind $canvas <Shift-B1-Motion> {::svvs::canvas_blocks::onDrag %x %y %s; break}
+    bind $canvas <Shift-ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y %s; break}
     bind $canvas <Control-plus> {::svvs::canvas_blocks::keyboardZoom 1; break}
     bind $canvas <Control-equal> {::svvs::canvas_blocks::keyboardZoom 1; break}
     bind $canvas <Control-KP_Add> {::svvs::canvas_blocks::keyboardZoom 1; break}
@@ -204,6 +208,7 @@ proc ::svvs::canvas_blocks::importDiagramData {data} {
 }
 
 proc ::svvs::canvas_blocks::drawBlock {module x y} {
+    variable zoom
     set ports [dict get $module ports]
     set inputs [::svvs::canvas_blocks::portsByDirection $ports input]
     set outputs [::svvs::canvas_blocks::portsByDirection $ports output]
@@ -211,7 +216,7 @@ proc ::svvs::canvas_blocks::drawBlock {module x y} {
     if {[::svvs::simulation_components::isBuiltin $module]} {
         if {[::svvs::simulation_components::isVirtual $module]} {
             set width [::svvs::theme::scale 64]
-            set height [::svvs::theme::scale 64]
+            set height [::svvs::theme::scale 44]
         } else {
             set width [::svvs::theme::scale 170]
             set rawHeight [expr {52 + ($rows * 20)}]
@@ -222,6 +227,8 @@ proc ::svvs::canvas_blocks::drawBlock {module x y} {
         set rawHeight [expr {58 + ($rows * 24)}]
         set height [expr {max([::svvs::theme::scale 82], [::svvs::theme::scale $rawHeight])}]
     }
+    set width [expr {$width * $zoom}]
+    set height [expr {$height * $zoom}]
     set id "block[incr ::svvs::state(blockSeq)]"
     return [::svvs::canvas_blocks::drawBlockWithId $id $module $x $y $width $height]
 }
@@ -318,17 +325,19 @@ proc ::svvs::canvas_blocks::portLabel {port} {
 }
 
 proc ::svvs::canvas_blocks::portY {y height index count} {
+    variable zoom
     if {$count <= 1} {
-        return [expr {$y + max([::svvs::theme::scale 50], $height / 2.0)}]
+        return [expr {$y + max([::svvs::theme::scale 50] * $zoom, $height / 2.0)}]
     }
-    set first [expr {$y + [::svvs::theme::scale 50]}]
-    set last [expr {$y + $height - [::svvs::theme::scale 22]}]
+    set first [expr {$y + ([::svvs::theme::scale 50] * $zoom)}]
+    set last [expr {$y + $height - ([::svvs::theme::scale 22] * $zoom)}]
     return [expr {$first + (($last - $first) * $index / double($count - 1))}]
 }
 
 proc ::svvs::canvas_blocks::layoutBlock {id} {
     variable canvas
     variable blocks
+    variable zoom
 
     set block $blocks($id)
     set module [dict get $block module]
@@ -337,18 +346,19 @@ proc ::svvs::canvas_blocks::layoutBlock {id} {
     set width [dict get $block width]
     set height [dict get $block height]
     set tag [dict get $block tag]
+    set headerHeight [expr {[::svvs::theme::scale 34] * $zoom}]
 
     foreach item [$canvas find withtag $tag] {
         set tags [$canvas gettags $item]
         if {[lsearch -exact $tags "block-body"] >= 0} {
             $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + $height}]
         } elseif {[lsearch -exact $tags "block-header"] >= 0} {
-            $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + [::svvs::theme::scale 34]}]
+            $canvas coords $item $x $y [expr {$x + $width}] [expr {$y + $headerHeight}]
         } elseif {[lsearch -exact $tags "block-title"] >= 0} {
-            $canvas coords $item [expr {$x + [::svvs::theme::scale 12]}] \
-                [expr {$y + ([::svvs::theme::scale 34] / 2.0)}]
+            $canvas coords $item [expr {$x + ([::svvs::theme::scale 12] * $zoom)}] \
+                [expr {$y + ($headerHeight / 2.0)}]
         } elseif {[lsearch -exact $tags "resize-handle"] >= 0} {
-            set handleSize [::svvs::theme::scale 12]
+            set handleSize [expr {[::svvs::theme::scale 12] * $zoom}]
             $canvas coords $item \
                 [expr {$x + $width - $handleSize}] [expr {$y + $height}] \
                 [expr {$x + $width}] [expr {$y + $height}] \
@@ -366,6 +376,7 @@ proc ::svvs::canvas_blocks::layoutBlock {id} {
 
 proc ::svvs::canvas_blocks::layoutPorts {id ports direction x y width height} {
     variable canvas
+    variable zoom
 
     set compactVirtual 0
     if {[info exists ::svvs::canvas_blocks::blocks($id)]} {
@@ -375,7 +386,7 @@ proc ::svvs::canvas_blocks::layoutPorts {id ports direction x y width height} {
 
     set count [llength $ports]
     set index 0
-    set portRadius [::svvs::theme::scale 5]
+    set portRadius [expr {[::svvs::theme::scale 5] * $zoom}]
     foreach port $ports {
         set pName [dict get $port name]
         set pTag "port:$id:$pName"
@@ -387,12 +398,12 @@ proc ::svvs::canvas_blocks::layoutPorts {id ports direction x y width height} {
 
         if {$direction eq "input"} {
             set px [expr {$compactVirtual ? $x + $portRadius : $x}]
-            set tx [expr {$x + [::svvs::theme::scale 18]}]
+            set tx [expr {$x + ([::svvs::theme::scale 18] * $zoom)}]
             set anchor w
             set color [::svvs::theme::color portIn]
         } else {
             set px [expr {$compactVirtual ? $x + $width - $portRadius : $x + $width}]
-            set tx [expr {$x + $width - [::svvs::theme::scale 18]}]
+            set tx [expr {$x + $width - ([::svvs::theme::scale 18] * $zoom)}]
             set anchor e
             set color [::svvs::theme::color portOut]
         }
@@ -436,12 +447,13 @@ proc ::svvs::canvas_blocks::addModuleAtScreenPoint {module rootX rootY} {
 
 proc ::svvs::canvas_blocks::addModuleAtVisibleCenter {module} {
     variable canvas
+    variable zoom
     if {$canvas eq "" || ![winfo exists $canvas]} {
         return
     }
 
-    set x [$canvas canvasx [expr {[winfo width $canvas] / 2 - [::svvs::theme::scale 110]}]]
-    set y [$canvas canvasy [expr {[winfo height $canvas] / 2 - [::svvs::theme::scale 70]}]]
+    set x [$canvas canvasx [expr {[winfo width $canvas] / 2 - ([::svvs::theme::scale 110] * $zoom)}]]
+    set y [$canvas canvasy [expr {[winfo height $canvas] / 2 - ([::svvs::theme::scale 70] * $zoom)}]]
     ::svvs::canvas_blocks::drawBlock [::svvs::canvas_blocks::nextInstanceModule $module] $x $y
 }
 
@@ -452,7 +464,7 @@ proc ::svvs::canvas_blocks::nextInstanceModule {module} {
     return $module
 }
 
-proc ::svvs::canvas_blocks::onPress {x y} {
+proc ::svvs::canvas_blocks::onPress {x y {state 0}} {
     variable canvas
     variable selectedTag
     variable selectedTags
@@ -460,6 +472,10 @@ proc ::svvs::canvas_blocks::onPress {x y} {
     variable resizeTag
     variable dragLastX
     variable dragLastY
+    variable dragStartX
+    variable dragStartY
+    variable dragAppliedDX
+    variable dragAppliedDY
 
     focus .
     set hit [::svvs::canvas_blocks::hitAt $x $y]
@@ -494,6 +510,10 @@ proc ::svvs::canvas_blocks::onPress {x y} {
         set dragTag $blockTag
         set dragLastX $x
         set dragLastY $y
+        set dragStartX $x
+        set dragStartY $y
+        set dragAppliedDX 0
+        set dragAppliedDY 0
         ::svvs::canvas_blocks::paintSelection
         ::svvs::canvas_blocks::showSelectionProperties
     } elseif {$hitKind eq "connection" && [::svvs::canvas_connections::selectAt $x $y]} {
@@ -507,7 +527,34 @@ proc ::svvs::canvas_blocks::onPress {x y} {
     }
 }
 
-proc ::svvs::canvas_blocks::onDrag {x y} {
+proc ::svvs::canvas_blocks::shiftPressed {state} {
+    return [expr {($state & 0x0001) != 0}]
+}
+
+proc ::svvs::canvas_blocks::constrainedDragDelta {x y state} {
+    variable dragStartX
+    variable dragStartY
+    variable dragAppliedDX
+    variable dragAppliedDY
+
+    set totalDX [expr {$x - $dragStartX}]
+    set totalDY [expr {$y - $dragStartY}]
+    if {[::svvs::canvas_blocks::shiftPressed $state]} {
+        if {abs($totalDX) >= abs($totalDY)} {
+            set totalDY 0
+        } else {
+            set totalDX 0
+        }
+    }
+
+    set dx [expr {$totalDX - $dragAppliedDX}]
+    set dy [expr {$totalDY - $dragAppliedDY}]
+    set dragAppliedDX $totalDX
+    set dragAppliedDY $totalDY
+    return [list $dx $dy]
+}
+
+proc ::svvs::canvas_blocks::onDrag {x y {state 0}} {
     variable canvas
     variable dragTag
     variable resizeTag
@@ -545,8 +592,7 @@ proc ::svvs::canvas_blocks::onDrag {x y} {
         return
     }
 
-    set dx [expr {$x - $dragLastX}]
-    set dy [expr {$y - $dragLastY}]
+    lassign [::svvs::canvas_blocks::constrainedDragDelta $x $y $state] dx dy
     ::svvs::canvas_blocks::moveSelectedBlocks $dragTag $dx $dy
     set dragLastX $x
     set dragLastY $y
@@ -554,7 +600,7 @@ proc ::svvs::canvas_blocks::onDrag {x y} {
     if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
 }
 
-proc ::svvs::canvas_blocks::onRelease {x y} {
+proc ::svvs::canvas_blocks::onRelease {x y {state 0}} {
     variable dragTag
     variable resizeTag
     variable viewportPanning
@@ -710,18 +756,19 @@ proc ::svvs::canvas_blocks::moveBlockData {blockTag dx dy} {
 
 proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
     variable blocks
+    variable zoom
     set id [lindex [split $handleTag :] 1]
     if {![info exists blocks($id)]} {
         return
     }
     set module [dict get $blocks($id) module]
     set kind [::svvs::simulation_components::kind $module]
-    if {$kind in {input probe}} {
-        set minWidth [::svvs::theme::scale 44]
-        set minHeight [::svvs::theme::scale 44]
+    if {$kind in {input probe clock}} {
+        set minWidth [expr {[::svvs::theme::scale 44] * $zoom}]
+        set minHeight [expr {[::svvs::theme::scale 44] * $zoom}]
     } else {
-        set minWidth [::svvs::theme::scale 140]
-        set minHeight [::svvs::theme::scale 70]
+        set minWidth [expr {[::svvs::theme::scale 140] * $zoom}]
+        set minHeight [expr {[::svvs::theme::scale 70] * $zoom}]
     }
     set width [expr {max($minWidth, [dict get $blocks($id) width] + $dx)}]
     set height [expr {max($minHeight, [dict get $blocks($id) height] + $dy)}]
@@ -729,6 +776,18 @@ proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
     dict set blocks($id) height $height
     ::svvs::canvas_blocks::layoutBlock $id
     ::svvs::simulation_components::updateDisplay $id
+}
+
+proc ::svvs::canvas_blocks::scaleBlockData {cx cy factor} {
+    variable blocks
+    foreach id [array names blocks] {
+        set x [dict get $blocks($id) x]
+        set y [dict get $blocks($id) y]
+        dict set blocks($id) x [expr {$cx + (($x - $cx) * $factor)}]
+        dict set blocks($id) y [expr {$cy + (($y - $cy) * $factor)}]
+        dict set blocks($id) width [expr {[dict get $blocks($id) width] * $factor}]
+        dict set blocks($id) height [expr {[dict get $blocks($id) height] * $factor}]
+    }
 }
 
 proc ::svvs::canvas_blocks::onWheel {delta x y} {
@@ -746,6 +805,7 @@ proc ::svvs::canvas_blocks::onWheel {delta x y} {
     set cy [$canvas canvasy $y]
     set zoom $nextZoom
     $canvas scale all $cx $cy $factor $factor
+    ::svvs::canvas_blocks::scaleBlockData $cx $cy $factor
     ::svvs::canvas_connections::scaleRoutes $cx $cy $factor
     ::svvs::canvas_blocks::updateTextForZoom
     ::svvs::canvas_connections::refreshAll
@@ -774,6 +834,7 @@ proc ::svvs::canvas_blocks::resetView {} {
     set cy [$canvas canvasy [expr {[winfo height $canvas] / 2.0}]]
     set factor [expr {1.0 / $zoom}]
     $canvas scale all $cx $cy $factor $factor
+    ::svvs::canvas_blocks::scaleBlockData $cx $cy $factor
     ::svvs::canvas_connections::scaleRoutes $cx $cy $factor
     set zoom 1.0
     ::svvs::canvas_blocks::updateTextForZoom
@@ -822,6 +883,9 @@ proc ::svvs::canvas_blocks::updateTextForZoom {} {
         } else {
             $canvas itemconfigure $item -state hidden
         }
+    }
+    if {[llength [info commands ::svvs::simulation_components::refreshAllDisplays]] > 0} {
+        ::svvs::simulation_components::refreshAllDisplays
     }
 }
 
