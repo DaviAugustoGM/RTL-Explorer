@@ -99,9 +99,100 @@ proc ::svvs::diagram_simulation::signalValue {name} {
     return x
 }
 
+proc ::svvs::diagram_simulation::integerValue {value} {
+    set value [string trim $value]
+    if {[string is integer -strict $value]} {
+        return $value
+    }
+    if {[regexp -nocase {^0x([0-9a-f]+)$} $value -> hex]} {
+        scan $hex %x parsed
+        return $parsed
+    }
+    if {[regexp -nocase {^0b([01]+)$} $value -> bits]} {
+        set parsed 0
+        foreach bit [split $bits ""] {
+            set parsed [expr {($parsed << 1) | $bit}]
+        }
+        return $parsed
+    }
+    return ""
+}
+
+proc ::svvs::diagram_simulation::rangeSlice {range portWidth} {
+    if {$range eq ""} {
+        return [list 0 $portWidth]
+    }
+    if {![regexp {^\s*([0-9]+)(?:\s*:\s*([0-9]+))?\s*$} $range -> left right]} {
+        return [list 0 $portWidth]
+    }
+    if {$right eq ""} {
+        set right $left
+    }
+    set low [expr {$left < $right ? $left : $right}]
+    set width [expr {abs($left - $right) + 1}]
+    return [list $low $width]
+}
+
+proc ::svvs::diagram_simulation::portWidth {portTag} {
+    if {[catch {set info [::svvs::canvas_blocks::portInfo $portTag]}]} {
+        return 1
+    }
+    set port [dict get $info port]
+    if {[dict exists $port width]} {
+        return [dict get $port width]
+    }
+    return 1
+}
+
+proc ::svvs::diagram_simulation::sliceValue {value range portWidth} {
+    if {$range eq ""} {
+        return $value
+    }
+    set number [::svvs::diagram_simulation::integerValue $value]
+    if {$number eq ""} {
+        return $value
+    }
+    lassign [::svvs::diagram_simulation::rangeSlice $range $portWidth] low width
+    if {$width <= 0} {
+        return $value
+    }
+    set mask [expr {(1 << $width) - 1}]
+    return [expr {($number >> $low) & $mask}]
+}
+
+proc ::svvs::diagram_simulation::connectionValue {connection} {
+    variable portSignals
+
+    foreach {endpoint rangeKey} {from fromRange to toRange} {
+        set portTag [dict get $connection $endpoint]
+        if {![info exists portSignals($portTag)]} {
+            continue
+        }
+        set range [::svvs::canvas_connections::connectionField $connection $rangeKey]
+        if {$range eq ""} {
+            continue
+        }
+        set value [::svvs::diagram_simulation::signalValue $portSignals($portTag)]
+        set width [::svvs::diagram_simulation::portWidth $portTag]
+        return [::svvs::diagram_simulation::sliceValue $value $range $width]
+    }
+
+    foreach endpoint {from to} {
+        set portTag [dict get $connection $endpoint]
+        if {![info exists portSignals($portTag)]} {
+            continue
+        }
+        return [::svvs::diagram_simulation::signalValue $portSignals($portTag)]
+    }
+
+    return x
+}
+
 proc ::svvs::diagram_simulation::valueColor {value} {
-    if {$value eq "x" || $value eq "z"} { return [::svvs::theme::color error] }
-    if {[string is integer -strict $value] && $value != 0} { return [::svvs::theme::color success] }
+    set normalized [string tolower [string trim $value]]
+    if {$normalized eq "x" || $normalized eq "z"} { return [::svvs::theme::color error] }
+    set number [::svvs::diagram_simulation::integerValue $value]
+    if {$number ne "" && $number != 0} { return [::svvs::theme::color success] }
     return #5f6873
 }
 
@@ -142,10 +233,8 @@ proc ::svvs::diagram_simulation::redraw {} {
     }
     foreach id [array names ::svvs::canvas_connections::connections] {
         set connection $::svvs::canvas_connections::connections($id)
-        set portTag [dict get $connection from]
-        if {![info exists portSignals($portTag)]} { set portTag [dict get $connection to] }
-        if {![info exists portSignals($portTag)]} { continue }
-        set value [::svvs::diagram_simulation::signalValue $portSignals($portTag)]
+        set value [::svvs::diagram_simulation::connectionValue $connection]
+        if {$value eq ""} { continue }
         set color [::svvs::diagram_simulation::valueColor $value]
         foreach item [$canvas find withtag $id] {
             if {[lsearch -exact [$canvas gettags $item] connection] >= 0} {

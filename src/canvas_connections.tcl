@@ -1646,6 +1646,61 @@ proc ::svvs::canvas_connections::clearRangeDialog {} {
     ::svvs::canvas_connections::commitRangeDialog
 }
 
+proc ::svvs::canvas_connections::portWidth {portTag} {
+    if {[catch {set info [::svvs::canvas_blocks::portInfo $portTag]}]} {
+        return 1
+    }
+    return [dict get [dict get $info port] width]
+}
+
+proc ::svvs::canvas_connections::portKind {portTag} {
+    if {[catch {set info [::svvs::canvas_blocks::portInfo $portTag]}]} {
+        return ""
+    }
+    return [::svvs::simulation_components::kind [dict get $info module]]
+}
+
+proc ::svvs::canvas_connections::fullPortWidthForConnection {conn} {
+    set fromTag [dict get $conn from]
+    set toTag [dict get $conn to]
+    set fromKind [::svvs::canvas_connections::portKind $fromTag]
+    set toKind [::svvs::canvas_connections::portKind $toTag]
+    set fromWidth [::svvs::canvas_connections::portWidth $fromTag]
+    set toWidth [::svvs::canvas_connections::portWidth $toTag]
+
+    if {$fromKind in {input probe} && $toKind ni {input probe clock}} {
+        return $toWidth
+    }
+    if {$toKind in {input probe} && $fromKind ni {input probe clock}} {
+        return $fromWidth
+    }
+    return [expr {max($fromWidth, $toWidth)}]
+}
+
+proc ::svvs::canvas_connections::rangeDialogWidth {conn fromRange toRange} {
+    set fromWidth [::svvs::canvas_connections::rangeWidth $fromRange]
+    set toWidth [::svvs::canvas_connections::rangeWidth $toRange]
+    if {$fromWidth ne "" && $toWidth ne "" && $fromWidth != $toWidth} {
+        return ""
+    }
+    if {$fromWidth ne ""} { return $fromWidth }
+    if {$toWidth ne ""} { return $toWidth }
+    return [::svvs::canvas_connections::fullPortWidthForConnection $conn]
+}
+
+proc ::svvs::canvas_connections::syncVirtualEndpointWidth {conn width} {
+    foreach endpoint {from to} {
+        set portTag [dict get $conn $endpoint]
+        set kind [::svvs::canvas_connections::portKind $portTag]
+        if {$kind ni {input probe}} {
+            continue
+        }
+        if {[::svvs::canvas_connections::portWidth $portTag] != $width} {
+            ::svvs::simulation_components::setPortWidth $portTag $width
+        }
+    }
+}
+
 proc ::svvs::canvas_connections::commitRangeDialog {} {
     variable connections
     variable rangeEditConn
@@ -1658,15 +1713,24 @@ proc ::svvs::canvas_connections::commitRangeDialog {} {
             return
         }
     }
+    set fromRange [string trim $rangeEditFrom]
+    set toRange [string trim $rangeEditTo]
+    set width [::svvs::canvas_connections::rangeDialogWidth \
+        $connections($rangeEditConn) $fromRange $toRange]
+    if {$width eq ""} {
+        ::svvs::console::log "Faixas de origem e destino precisam ter a mesma largura." warn
+        return
+    }
+    ::svvs::canvas_connections::syncVirtualEndpointWidth $connections($rangeEditConn) $width
     dict set connections($rangeEditConn) fromRange [string trim $rangeEditFrom]
     dict set connections($rangeEditConn) toRange [string trim $rangeEditTo]
-    set width [::svvs::canvas_connections::effectiveConnectionWidth $connections($rangeEditConn)]
     dict set connections($rangeEditConn) width $width
     ::svvs::canvas_connections::select $rangeEditConn
     ::svvs::canvas_connections::paintSelection $rangeEditConn
     if {$::svvs::diagram_simulation::active} { ::svvs::diagram_simulation::redraw }
     catch {destroy .connectionRangeEditor}
     ::svvs::console::log "Faixa de bits da conexao atualizada."
+    ::svvs::console::log "Execute Build and Run novamente para aplicar a nova faixa na simulacao." info
 }
 
 proc ::svvs::canvas_connections::effectiveConnectionWidth {conn} {

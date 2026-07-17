@@ -4,6 +4,26 @@ RTL Explorer e uma ferramenta grafica em Tcl/Tk para abrir projetos Verilog/Syst
 
 O objetivo do projeto e aproximar o fluxo de RTL de uma experiencia visual parecida com ferramentas como Logisim/Falstad, mas usando modulos reais em Verilog/SystemVerilog.
 
+## Galeria
+
+### Diagrama de blocos
+
+O modo de blocos permite montar um circuito visualmente, conectar modulos do usuario, adicionar entradas, saidas, clock e acompanhar a simulacao direto no canvas.
+
+![Diagrama de blocos](images/diagrama_blocos.png)
+
+### Mapeamento de valores
+
+Entradas e saidas podem usar formatos binario, decimal ou hexadecimal. Tambem e possivel mapear valores para textos definidos pelo usuario, facilitando demonstracoes e depuracao.
+
+![Mapeamento de valores](images/diagrama_mapeamento.png)
+
+### Maquinas de estado
+
+O modo FSM detecta maquinas de estado no RTL, mostra transicoes, condicoes, loops inferidos e permite ajustar o desenho para apresentacao ou exportacao.
+
+![Maquina de estados](images/maquina%20de%20estados.png)
+
 ## Recursos principais
 
 - Abre arquivos `.sv`, `.v` ou pastas completas de RTL.
@@ -11,7 +31,7 @@ O objetivo do projeto e aproximar o fluxo de RTL de uma experiencia visual parec
 - Detecta modulos, portas, larguras de barramento, parametros simples e instancias nomeadas ou posicionais.
 - Monta diagramas de blocos arrastaveis a partir dos modulos do usuario.
 - Permite conexoes manuais, conexoes automaticas e conexoes por faixa de bits.
-- Possui blocos internos para entrada, saida, clock, constantes, logica e armazenamento.
+- Possui blocos internos para entrada, saida, clock, reset e constantes.
 - Permite autoconectar blocos de entrada/saida aos modulos selecionados.
 - Suporta nomes editaveis, formatos binario/decimal/hexadecimal e mapeamento de valores para texto.
 - Mostra waveforms ao vivo no proprio modo de diagrama.
@@ -130,6 +150,7 @@ Recursos do modo FSM:
 ```text
 assets/       Icones e recursos visuais.
 dist/         Saida de builds e instaladores gerados.
+images/       Prints usados no README e na apresentacao do projeto.
 packaging/    Scripts de instalacao e empacotamento Windows/Linux.
 sample/       Projetos e modulos pequenos para teste.
 scripts/      Scripts auxiliares de verificacao.
@@ -158,11 +179,12 @@ toolchain.tcl             Localizacao das ferramentas externas.
 
 A pasta `sample/` contem exemplos simples para testar rapidamente:
 
-- `producer.sv`
-- `consumer.sv`
-- `vending_machine.sv`
+- `adder.sv`: somador simples.
+- `counter.sv`: contador com clock, reset e controle de direcao.
+- `rs_flip_flop.sv`: flip-flop RS.
+- `ula.sv`: ULA simples.
 
-Para testar, use `File > Open Folder` e selecione a pasta `sample`.
+Para testar, use `File > Samples` ou `File > Open Folder` e selecione a pasta `sample`.
 
 ## Arquivos gerados
 

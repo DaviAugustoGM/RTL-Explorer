@@ -60,7 +60,12 @@ proc ::svvs::simulation_model::diagramModel {} {
             set directed [::svvs::simulation_model::directedConnection $connection $allPorts]
             if {$directed ne ""} {
                 lappend slicedConnections $directed
-                dict set sliceDrivenPorts [dict get $directed target] 1
+                set targetTag [dict get $directed target]
+                set targetRecord [dict get $allPorts $targetTag]
+                set targetWidth [dict get [dict get $targetRecord port] width]
+                set targetRange [dict get $directed targetRange]
+                dict set sliceDrivenPorts $targetTag \
+                    [::svvs::simulation_model::rangeWidthOrPort $targetRange $targetWidth]
             }
             continue
         }
@@ -148,9 +153,11 @@ proc ::svvs::simulation_model::diagramModel {} {
 
         set inputName ""
         set drivenBySlice 0
+        set sliceDrivenWidth ""
         foreach record $members {
             if {[dict exists $sliceDrivenPorts [dict get $record tag]]} {
                 set drivenBySlice 1
+                set sliceDrivenWidth [dict get $sliceDrivenPorts [dict get $record tag]]
                 break
             }
         }
@@ -199,6 +206,15 @@ proc ::svvs::simulation_model::diagramModel {} {
             lappend outputs [dict create name $external width $width net $netName source $driver]
             if {$outputName eq ""} { set outputName $external }
         }
+        if {$outputName eq "" && $drivenBySlice && [llength $probes] > 0} {
+            set probe [lindex $probes 0]
+            set probeModule [dict get $probe module]
+            set probePort [dict get $probe port]
+            set probeWidth [expr {$sliceDrivenWidth ne "" ? $sliceDrivenWidth : $width}]
+            set outputName [::svvs::simulation_model::safeName \
+                "[dict get $probeModule instance]__[dict get $probe block]__[dict get $probePort name]"]
+            lappend outputs [dict create name $outputName width $probeWidth net $netName source $probe]
+        }
         foreach probe $probes {
             set probeModule [dict get $probe module]
             set probeBlock [dict get $probe block]
@@ -206,10 +222,11 @@ proc ::svvs::simulation_model::diagramModel {} {
             if {$observed eq ""} { continue }
             set base [::svvs::simulation_components::config $probeModule base hex]
             set valueMap [::svvs::simulation_components::config $probeModule valueMap {}]
-            lappend signalBlocks [dict create block $probeBlock kind probe signal $observed width $width base $base]
+            set probeWidth [expr {$sliceDrivenWidth ne "" ? $sliceDrivenWidth : $width}]
+            lappend signalBlocks [dict create block $probeBlock kind probe signal $observed width $probeWidth base $base]
             if {[::svvs::simulation_components::config $probeModule trace 1]} {
                 lappend traces [dict create name $observed label [::svvs::simulation_components::displayName $probeModule] \
-                    width $width base $base valueMap $valueMap block $probeBlock]
+                    width $probeWidth base $base valueMap $valueMap block $probeBlock]
             }
         }
     }
