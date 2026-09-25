@@ -286,9 +286,11 @@ proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
         } {
             lassign $order sourceModuleKey sourcePortKey targetModuleKey targetPortKey
             set fromTag [::svvs::canvas_connections::uniquePortTag \
-                $outputs [dict get $hint $sourceModuleKey] [dict get $hint $sourcePortKey]]
+                $outputs [dict get $hint $sourceModuleKey] [dict get $hint $sourcePortKey] \
+                [::svvs::canvas_connections::hintInstance $hint $sourceModuleKey]]
             set toTag [::svvs::canvas_connections::uniquePortTag \
-                $inputs [dict get $hint $targetModuleKey] [dict get $hint $targetPortKey]]
+                $inputs [dict get $hint $targetModuleKey] [dict get $hint $targetPortKey] \
+                [::svvs::canvas_connections::hintInstance $hint $targetModuleKey]]
             if {$fromTag eq "" || $toTag eq ""} {
                 continue
             }
@@ -376,8 +378,17 @@ proc ::svvs::canvas_connections::rangeWidth {range} {
     return [expr {abs($left - $right) + 1}]
 }
 
-proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName} {
+proc ::svvs::canvas_connections::hintInstance {hint moduleKey} {
+    set instanceKey [expr {$moduleKey eq "fromModule" ? "fromInstance" : "toInstance"}]
+    if {[dict exists $hint $instanceKey]} {
+        return [dict get $hint $instanceKey]
+    }
+    return ""
+}
+
+proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName {instanceName ""}} {
     set matches {}
+    set instanceMatches {}
     foreach tag $candidates {
         set info [::svvs::canvas_blocks::portInfo $tag]
         set module [dict get $info module]
@@ -385,7 +396,15 @@ proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName} 
         if {[string equal -nocase [dict get $module name] $moduleName] &&
             [string equal -nocase [dict get $port name] $portName]} {
             lappend matches $tag
+            if {$instanceName ne "" &&
+                [dict exists $module instance] &&
+                [string equal -nocase [dict get $module instance] $instanceName]} {
+                lappend instanceMatches $tag
+            }
         }
+    }
+    if {[llength $instanceMatches] == 1} {
+        return [lindex $instanceMatches 0]
     }
     if {[llength $matches] == 1} {
         return [lindex $matches 0]

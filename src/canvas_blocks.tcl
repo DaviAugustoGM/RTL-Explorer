@@ -457,6 +457,45 @@ proc ::svvs::canvas_blocks::addModuleAtVisibleCenter {module} {
     ::svvs::canvas_blocks::drawBlock [::svvs::canvas_blocks::nextInstanceModule $module] $x $y
 }
 
+proc ::svvs::canvas_blocks::addModulesAtVisibleCenter {modules} {
+    variable canvas
+    variable zoom
+    variable selectedTag
+    variable selectedTags
+
+    if {$canvas eq "" || ![winfo exists $canvas] || [llength $modules] == 0} {
+        return {}
+    }
+
+    set count [llength $modules]
+    set columns [expr {$count <= 2 ? $count : 3}]
+    set spacingX [expr {[::svvs::theme::scale 310] * $zoom}]
+    set spacingY [expr {[::svvs::theme::scale 190] * $zoom}]
+    set centerX [$canvas canvasx [expr {[winfo width $canvas] / 2}]]
+    set centerY [$canvas canvasy [expr {[winfo height $canvas] / 2}]]
+    set rows [expr {int(ceil($count / double($columns)))}]
+    set originX [expr {$centerX - (($columns - 1) * $spacingX / 2.0)}]
+    set originY [expr {$centerY - (($rows - 1) * $spacingY / 2.0)}]
+
+    set created {}
+    set index 0
+    foreach module $modules {
+        set col [expr {$index % $columns}]
+        set row [expr {int($index / $columns)}]
+        set x [expr {$originX + ($col * $spacingX) - ([::svvs::theme::scale 110] * $zoom)}]
+        set y [expr {$originY + ($row * $spacingY) - ([::svvs::theme::scale 55] * $zoom)}]
+        set id [::svvs::canvas_blocks::drawBlock $module $x $y]
+        lappend created "block:$id"
+        incr index
+    }
+
+    set selectedTag ""
+    set selectedTags $created
+    ::svvs::canvas_blocks::paintSelection
+    ::svvs::canvas_blocks::showSelectionProperties
+    return $created
+}
+
 proc ::svvs::canvas_blocks::nextInstanceModule {module} {
     set name [dict get $module name]
     set instance "u_${name}_$::svvs::state(blockSeq)"

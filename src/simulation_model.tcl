@@ -260,10 +260,73 @@ proc ::svvs::simulation_model::diagramModel {} {
             width $sourceSliceWidth]
     }
 
+    set checkedInterfaceModules {}
+    foreach id [lsort [array names ::svvs::canvas_blocks::blocks]] {
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        if {[::svvs::simulation_components::isVirtual $module]} { continue }
+        set moduleName [dict get $module name]
+        if {[dict exists $checkedInterfaceModules $moduleName]} { continue }
+        dict set checkedInterfaceModules $moduleName 1
+        set interfaceNames [::svvs::simulation_model::interfaceNamesForModule $module]
+        if {[llength $interfaceNames] == 0} { continue }
+        set message "O modulo $moduleName usa interface SystemVerilog expandida ([join $interfaceNames {, }]). O RTL Explorer consegue desenhar esses pinos, mas a simulacao por sv2v/Yosys ainda precisa de portas comuns."
+        set alternative [::svvs::simulation_model::flatAlternativeForModule $moduleName]
+        if {$alternative ne ""} {
+            append message " Use o modulo $alternative para simular este bloco."
+        } else {
+            append message " Crie ou abra uma versao flat do modulo para simular."
+        }
+        lappend errors $message
+    }
+
     return [dict create \
         inputs $inputs outputs $outputs nets $nets portNets $portNets errors $errors \
         traces $traces signalBlocks $signalBlocks clocks $clocks \
         sliceAssignments $sliceAssignments]
+}
+
+proc ::svvs::simulation_model::interfaceNamesForModule {module} {
+    set interfaces {}
+    foreach port [dict get $module ports] {
+        if {[dict exists $port interface]} {
+            set name [dict get $port interface]
+            if {[lsearch -exact $interfaces $name] < 0} {
+                lappend interfaces $name
+            }
+        }
+    }
+    return $interfaces
+}
+
+proc ::svvs::simulation_model::moduleNamesInProject {} {
+    set names {}
+    if {![info exists ::svvs::project_tree::projectFiles]} {
+        return $names
+    }
+    foreach path $::svvs::project_tree::projectFiles {
+        if {![file exists $path]} { continue }
+        set handle [open $path r]
+        set text [read $handle]
+        close $handle
+        foreach name [::svvs::sv_parser::moduleNamesFromText $text] {
+            dict set names $name 1
+        }
+    }
+    return [dict keys $names]
+}
+
+proc ::svvs::simulation_model::flatAlternativeForModule {moduleName} {
+    set candidates [list "${moduleName}_flat" "${moduleName}_flat_top"]
+    if {[regexp {^(.*)_wrapper$} $moduleName -> base]} {
+        lappend candidates "${base}_flat" "${base}_flat_top" "${base}_top"
+    }
+    set moduleNames [::svvs::simulation_model::moduleNamesInProject]
+    foreach candidate $candidates {
+        if {[lsearch -exact $moduleNames $candidate] >= 0} {
+            return $candidate
+        }
+    }
+    return ""
 }
 
 proc ::svvs::simulation_model::connectionHasSlice {connection} {
@@ -461,7 +524,11 @@ proc ::svvs::simulation_model::filesForDiagram {} {
     return [lsort -unique $selected]
 }
 
-proc ::svvs::simulation_model::packageInfo {} {
+proc ::svvs::simulation_model::packageInfo {{files {}}} {
+    set required [::svvs::simulation_model::packageReferencesForFiles $files]
+    if {[llength $files] > 0 && [dict size $required] == 0} {
+        return {}
+    }
     set packages {}
     foreach path $::svvs::project_tree::projectFiles {
         if {![file exists $path]} { continue }
@@ -470,6 +537,9 @@ proc ::svvs::simulation_model::packageInfo {} {
         close $handle
         foreach {full packageName body} [regexp -all -inline -nocase -- \
                 {(?is)\mpackage\s+([A-Za-z_][A-Za-z0-9_$]*)\s*;(.*?)\mendpackage\M} $text] {
+            if {[dict size $required] > 0 && ![dict exists $required $packageName]} {
+                continue
+            }
             set symbols {}
             foreach {enumFull enumBody typeName} [regexp -all -inline -- \
                     {(?is)\mtypedef\s+enum\M[^\{]*\{([^\}]+)\}\s*([A-Za-z_][A-Za-z0-9_$]*)\s*;} $body] {
@@ -489,6 +559,25 @@ proc ::svvs::simulation_model::packageInfo {} {
         }
     }
     return $packages
+}
+
+proc ::svvs::simulation_model::packageReferencesForFiles {files} {
+    set references {}
+    foreach path $files {
+        if {![file exists $path]} { continue }
+        set handle [open $path r]
+        set text [read $handle]
+        close $handle
+        foreach {full packageName} [regexp -all -inline -nocase -- \
+                {\mimport\s+([A-Za-z_][A-Za-z0-9_$]*)::} $text] {
+            dict set references $packageName 1
+        }
+        foreach {full packageName} [regexp -all -inline -- \
+                {\m([A-Za-z_][A-Za-z0-9_$]*)::[A-Za-z_][A-Za-z0-9_$]*} $text] {
+            dict set references $packageName 1
+        }
+    }
+    return $references
 }
 
 proc ::svvs::simulation_model::qualifyPackageImports {text packages} {
@@ -517,7 +606,7 @@ proc ::svvs::simulation_model::prepareSourceFiles {files directory} {
     foreach stale [glob -nocomplain -directory $directory *] {
         if {[file isfile $stale]} { file delete -force $stale }
     }
-    set packages [::svvs::simulation_model::packageInfo]
+    set packages [::svvs::simulation_model::packageInfo $files]
     set prepared {}
     set packageBasenames {}
     set index 0

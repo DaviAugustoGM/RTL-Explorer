@@ -185,6 +185,9 @@ proc ::svvs::layout::showAutoConnectMenu {widget} {
     .autoConnectMenu add command -label "Connect matching ports" \
         -command {::svvs::canvas_connections::autoConnect}
     .autoConnectMenu add separator
+    .autoConnectMenu add command -label "Place submodules of selected module" \
+        -command {::svvs::project_tree::placeSubmodulesOfSelected}
+    .autoConnectMenu add separator
     .autoConnectMenu add command -label "Create input blocks for selected module" \
         -command {::svvs::simulation_components::autoIoForSelected inputs}
     .autoConnectMenu add command -label "Create output probes for selected module" \

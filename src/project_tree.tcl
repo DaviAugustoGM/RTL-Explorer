@@ -601,3 +601,84 @@ proc ::svvs::project_tree::addSelectedToCanvas {} {
     ::svvs::canvas_blocks::addModuleAtVisibleCenter $nodeModules($item)
     ::svvs::console::log "Bloco adicionado ao canvas: [dict get $nodeModules($item) name]" ok
 }
+
+proc ::svvs::project_tree::moduleByName {moduleName} {
+    variable sampleModules
+    foreach module $sampleModules {
+        if {[string equal -nocase [dict get $module name] $moduleName]} {
+            return $module
+        }
+    }
+    return ""
+}
+
+proc ::svvs::project_tree::selectedModule {} {
+    variable widget
+    variable nodeModules
+    variable projectNodeModules
+
+    if {$widget ne "" && [winfo exists $widget]} {
+        set item [lindex [$widget selection] 0]
+        if {$item ne ""} {
+            if {[info exists nodeModules($item)]} {
+                return $nodeModules($item)
+            }
+            if {[info exists projectNodeModules($item)]} {
+                return $projectNodeModules($item)
+            }
+        }
+    }
+
+    set blockId [::svvs::canvas_blocks::selectedBlockId]
+    if {$blockId ne "" && [info exists ::svvs::canvas_blocks::blocks($blockId)]} {
+        return [dict get $::svvs::canvas_blocks::blocks($blockId) module]
+    }
+    return ""
+}
+
+proc ::svvs::project_tree::placeSubmodulesOfSelected {} {
+    variable projectFiles
+    variable sampleModules
+
+    set module [::svvs::project_tree::selectedModule]
+    if {$module eq ""} {
+        ::svvs::console::log "Selecione um modulo no Explorer ou no diagrama antes de expandir submodulos." warn
+        return 0
+    }
+    if {[llength $projectFiles] == 0} {
+        ::svvs::console::log "Abra arquivos ou uma pasta antes de expandir submodulos." warn
+        return 0
+    }
+
+    set ownerName [dict get $module name]
+    set moduleNames {}
+    foreach candidate $sampleModules {
+        lappend moduleNames [dict get $candidate name]
+    }
+    set instances [::svvs::sv_parser::structuralInstantiationsFromFiles \
+        $projectFiles $ownerName $moduleNames]
+    if {[llength $instances] == 0} {
+        ::svvs::console::log "Nenhum submodulo instanciado foi encontrado em $ownerName." warn
+        return 0
+    }
+
+    set submodules {}
+    foreach inst $instances {
+        set submodule [::svvs::project_tree::moduleByName [dict get $inst type]]
+        if {$submodule eq ""} {
+            continue
+        }
+        dict set submodule instance [dict get $inst instance]
+        dict set submodule structuralOwner $ownerName
+        lappend submodules $submodule
+    }
+    if {[llength $submodules] == 0} {
+        ::svvs::console::log "Os submodulos de $ownerName nao estao carregados no projeto." warn
+        return 0
+    }
+
+    set created [::svvs::canvas_blocks::addModulesAtVisibleCenter $submodules]
+    set count [llength $created]
+    ::svvs::console::log "Submodulos de $ownerName adicionados ao diagrama: $count instancia(s)." ok
+    return $count
+}

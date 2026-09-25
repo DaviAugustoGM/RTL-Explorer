@@ -70,6 +70,84 @@ foreach port $typedPorts { lappend typedNames [dict get $port name] }
 if {$typedNames ne {a b state done} || [dict get [lindex $typedPorts 1] width] != 8} {
     error "package-typed or grouped ANSI ports were parsed incorrectly: $typedNames"
 }
+set interfaceText {
+interface axi_lite_if;
+  logic [31:0] awaddr;
+  logic awvalid;
+  logic awready;
+  logic [31:0] rdata;
+  logic rvalid;
+  logic rready;
+  modport slave (
+    input awaddr,
+    input awvalid,
+    output awready,
+    output rdata,
+    output rvalid,
+    input rready
+  );
+endinterface
+
+module axi_wrapper (
+  input logic clk_i,
+  axi_lite_if.slave axi_slv,
+  output logic done_o
+);
+endmodule
+}
+set interfaces [::svvs::sv_parser::interfacesFromText $interfaceText]
+set interfacePorts [::svvs::sv_parser::portsFromModuleText $interfaceText axi_wrapper $interfaces]
+set interfaceNames {}
+foreach port $interfacePorts { lappend interfaceNames [dict get $port name] }
+if {$interfaceNames ne {clk_i axi_slv.awaddr axi_slv.awvalid axi_slv.awready axi_slv.rdata axi_slv.rvalid axi_slv.rready done_o}} {
+    error "interface modport was not expanded into member ports: $interfaceNames"
+}
+foreach port $interfacePorts {
+    if {[dict get $port name] eq "axi_slv.awaddr" && [dict get $port width] != 32} {
+        error "interface signal width was not preserved"
+    }
+    if {[dict get $port name] eq "axi_slv.awready" && [dict get $port direction] ne "output"} {
+        error "interface modport direction was not preserved"
+    }
+}
+set knownInterfaceWrapper {
+module axi_lite_wrapper #(
+  parameter int unsigned AXI_ADDR_WIDTH = 24,
+  parameter int unsigned AXI_DATA_WIDTH = 64
+) (
+  input logic clk_i,
+  AXI_LITE.Slave axi_slv,
+  output logic done_o
+);
+endmodule
+}
+set knownPorts [::svvs::sv_parser::portsFromModuleText $knownInterfaceWrapper axi_lite_wrapper]
+set knownNames {}
+foreach port $knownPorts { lappend knownNames [dict get $port name] }
+foreach expected {axi_slv.aw_addr axi_slv.aw_ready axi_slv.w_data axi_slv.w_strb axi_slv.r_data} {
+    if {[lsearch -exact $knownNames $expected] < 0} {
+        error "known AXI_LITE interface did not expose $expected: $knownNames"
+    }
+}
+foreach port $knownPorts {
+    switch -- [dict get $port name] {
+        axi_slv.aw_addr {
+            if {[dict get $port width] != 24 || [dict get $port direction] ne "input"} {
+                error "AXI_LITE aw_addr metadata is wrong"
+            }
+        }
+        axi_slv.w_strb {
+            if {[dict get $port width] != 8} {
+                error "AXI_LITE strobe width should follow data width"
+            }
+        }
+        axi_slv.r_data {
+            if {[dict get $port width] != 64 || [dict get $port direction] ne "output"} {
+                error "AXI_LITE r_data metadata is wrong"
+            }
+        }
+    }
+}
 set bodyParenHeader {
 module body_parens #(
   parameter int WIDTH = (2 + 2)
@@ -184,12 +262,25 @@ puts $fh $structuralVerilog
 close $fh
 set structuralHints [::svvs::sv_parser::structuralConnectionsFromFiles \
     [list $structuralPath] {source sink}]
+set structuralInstances [::svvs::sv_parser::structuralInstantiationsFromFiles \
+    [list $structuralPath] top {source sink top}]
 file delete $structuralPath
+set structuralInstanceNames {}
+foreach inst $structuralInstances {
+    lappend structuralInstanceNames "[dict get $inst type]:[dict get $inst instance]"
+}
+foreach expected {source:u_source sink:u_sink} {
+    if {[lsearch -exact $structuralInstanceNames $expected] < 0} {
+        error "structural submodule instance $expected was not detected: $structuralInstanceNames"
+    }
+}
 set foundStructural 0
 foreach hint $structuralHints {
     if {[dict get $hint fromModule] eq "source" &&
+        [dict get $hint fromInstance] eq "u_source" &&
         [dict get $hint fromPort] eq "data" &&
         [dict get $hint toModule] eq "sink" &&
+        [dict get $hint toInstance] eq "u_sink" &&
         [dict get $hint toPort] eq "data"} {
         set foundStructural 1
     }
@@ -336,4 +427,38 @@ if {![regexp {assign net_[0-9]+ = net_[0-9]+\[7:0\];} $slicedGenerated] ||
     ![regexp {assign net_[0-9]+ = net_[0-9]+\[15:8\];} $slicedGenerated]} {
     error "sliced assignments missing from generated top: $slicedGenerated"
 }
+
+array unset ::svvs::canvas_blocks::blocks
+array set ::svvs::canvas_blocks::blocks {}
+set interfaceModule [dict create name aclint_axi4lite_wrapper instance u_axi ports [list \
+    [dict create name clk_i direction input width 1] \
+    [dict create name axi_slv.aw_addr direction input width 32 interface axi_slv interfaceSignal aw_addr] \
+    [dict create name axi_slv.r_data direction output width 32 interface axi_slv interfaceSignal r_data]]]
+set ::svvs::canvas_blocks::blocks(iface) [dict create module $interfaceModule]
+proc ::svvs::canvas_connections::exportConnectionData {} { return {} }
+set flatPath [file join [file dirname [info script]] flat_alternative_fixture.sv]
+set fh [open $flatPath w]
+puts $fh {
+module aclint_axi4lite_flat_top(input clk_i, input [31:0] s_axi_awaddr, output [31:0] s_axi_rdata);
+endmodule
+}
+close $fh
+set ::svvs::project_tree::projectFiles [list $flatPath]
+set interfaceModel [::svvs::simulation_model::diagramModel]
+file delete $flatPath
+set interfaceErrors [join [dict get $interfaceModel errors] "\n"]
+if {![string match {*usa interface SystemVerilog expandida*} $interfaceErrors] ||
+    ![string match {*aclint_axi4lite_flat_top*} $interfaceErrors]} {
+    error "interface simulation guard did not explain the flat alternative: $interfaceErrors"
+}
+
+set noPackagePath [file join [file dirname [info script]] no_package_fixture.sv]
+set fh [open $noPackagePath w]
+puts $fh {module no_package(input a, output y); assign y = a; endmodule}
+close $fh
+set ::svvs::project_tree::projectFiles [list $noPackagePath]
+if {[dict size [::svvs::simulation_model::packageInfo [list $noPackagePath]]] != 0} {
+    error "package filtering copied packages even when selected sources do not reference any"
+}
+file delete $noPackagePath
 puts "simulation model tests: ok"

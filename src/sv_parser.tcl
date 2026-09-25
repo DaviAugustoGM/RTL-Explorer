@@ -11,6 +11,8 @@ proc ::svvs::sv_parser::parseFiles {paths} {
 
 proc ::svvs::sv_parser::parseModulesFromFiles {paths} {
     set modules {}
+    set sources {}
+    set combinedText ""
     foreach path $paths {
         if {![file exists $path]} {
             continue
@@ -19,13 +21,21 @@ proc ::svvs::sv_parser::parseModulesFromFiles {paths} {
         set fh [open $path r]
         set text [read $fh]
         close $fh
+        lappend sources [dict create path $path text $text]
+        append combinedText "\n" $text
+    }
+
+    set interfaces [::svvs::sv_parser::interfacesFromText $combinedText]
+    foreach source $sources {
+        set path [dict get $source path]
+        set text [dict get $source text]
 
         foreach moduleName [::svvs::sv_parser::moduleNamesFromText $text] {
             lappend modules [dict create \
                 name $moduleName \
                 instance "u_$moduleName" \
                 sourcePath [file normalize $path] \
-                ports [::svvs::sv_parser::portsFromModuleText $text $moduleName]]
+                ports [::svvs::sv_parser::portsFromModuleText $text $moduleName $interfaces]]
         }
     }
     return $modules
@@ -357,6 +367,15 @@ proc ::svvs::sv_parser::moduleNamesFromText {text} {
 
 proc ::svvs::sv_parser::structuralConnectionsFromFiles {paths moduleNames} {
     set hints {}
+    set instances [::svvs::sv_parser::structuralInstantiationsFromFiles $paths "" $moduleNames]
+    foreach hint [::svvs::sv_parser::connectionHintsFromInstantiations $instances] {
+        lappend hints $hint
+    }
+    return $hints
+}
+
+proc ::svvs::sv_parser::structuralInstantiationsFromFiles {paths ownerModule moduleNames} {
+    set instances {}
     set sources {}
     set modulePortOrder {}
     foreach path $paths {
@@ -383,15 +402,18 @@ proc ::svvs::sv_parser::structuralConnectionsFromFiles {paths moduleNames} {
     foreach source $sources {
         set clean [dict get $source text]
         foreach moduleName [::svvs::sv_parser::moduleNamesFromText $clean] {
+            if {$ownerModule ne "" && ![string equal -nocase $ownerModule $moduleName]} {
+                continue
+            }
             set moduleText [::svvs::sv_parser::moduleText $clean $moduleName]
-            set instances [::svvs::sv_parser::moduleInstantiationsFromText \
-                $moduleText $moduleName $moduleNames $modulePortOrder]
-            foreach hint [::svvs::sv_parser::connectionHintsFromInstantiations $instances] {
-                lappend hints $hint
+            foreach inst [::svvs::sv_parser::moduleInstantiationsFromText \
+                    $moduleText $moduleName $moduleNames $modulePortOrder] {
+                dict set inst owner $moduleName
+                lappend instances $inst
             }
         }
     }
-    return $hints
+    return $instances
 }
 
 proc ::svvs::sv_parser::moduleInstantiationsFromText {text ownerModule moduleNames {modulePortOrder {}}} {
@@ -440,9 +462,7 @@ proc ::svvs::sv_parser::moduleInstantiationsFromText {text ownerModule moduleNam
                 set ports [::svvs::sv_parser::positionalPortMapFromText \
                     $mapText [dict get $modulePortOrder $type]]
             }
-            if {[dict size $ports] > 0} {
-                lappend instances [dict create type $type instance $instance ports $ports]
-            }
+            lappend instances [dict create type $type instance $instance ports $ports]
             set offset [expr {$close + 1}]
         }
     }
@@ -471,9 +491,11 @@ proc ::svvs::sv_parser::connectionHintsFromInstantiations {instances} {
                 lappend hints [dict create \
                     net $net \
                     fromModule [dict get $a module] \
+                    fromInstance [dict get $a instance] \
                     fromPort [dict get $a port] \
                     fromRange [dict get $a range] \
                     toModule [dict get $b module] \
+                    toInstance [dict get $b instance] \
                     toPort [dict get $b port] \
                     toRange [dict get $b range]]
             }
@@ -621,9 +643,10 @@ proc ::svvs::sv_parser::moduleHeader {text moduleName} {
     return [string range $clean [expr {$portOpen + 1}] [expr {$portClose - 1}]]
 }
 
-proc ::svvs::sv_parser::portsFromModuleText {text moduleName} {
+proc ::svvs::sv_parser::portsFromModuleText {text moduleName {interfaces {}}} {
     set ports {}
     set byName {}
+    set headerOrder {}
     set moduleText [::svvs::sv_parser::moduleText [::svvs::sv_parser::stripComments $text] $moduleName]
     set parameters [::svvs::sv_parser::parametersFromModuleText $moduleText]
     set header [::svvs::sv_parser::moduleHeader $text $moduleName]
@@ -636,6 +659,19 @@ proc ::svvs::sv_parser::portsFromModuleText {text moduleName} {
         foreach raw [split $header ","] {
             set item [string trim $raw]
             if {$item eq ""} {
+                continue
+            }
+            set expanded [::svvs::sv_parser::interfacePortsFromHeaderItem $item $interfaces $parameters]
+            if {[llength $expanded] > 0} {
+                foreach port $expanded {
+                    set name [dict get $port name]
+                    if {![dict exists $byName $name]} {
+                        dict set byName $name $port
+                        lappend headerOrder $name
+                    }
+                }
+                set currentDir ""
+                set currentRange ""
                 continue
             }
             if {[regexp -nocase {^(input|output|inout)\M\s*(.*)$} $item -> dir declaration]} {
@@ -655,19 +691,29 @@ proc ::svvs::sv_parser::portsFromModuleText {text moduleName} {
             set direction [expr {$currentDir eq "inout" ? "input" : $currentDir}]
             if {![dict exists $byName $name]} {
                 dict set byName $name [dict create name $name direction $direction width $width]
+                lappend headerOrder $name
             }
         }
     }
 
     set declarationOrder {}
-    foreach port [::svvs::sv_parser::declarationPortsFromModuleText $text $moduleName $parameters] {
+    foreach port [::svvs::sv_parser::declarationPortsFromModuleText $text $moduleName $parameters $interfaces] {
         dict set byName [dict get $port name] $port
         lappend declarationOrder [dict get $port name]
     }
 
-    set order [::svvs::sv_parser::portOrderFromHeader $header]
+    set order $headerOrder
+    if {[llength $order] == 0} {
+        set order [::svvs::sv_parser::portOrderFromHeader $header]
+    }
     if {[llength $order] == 0} {
         set order $declarationOrder
+    } else {
+        foreach name $declarationOrder {
+            if {[lsearch -exact $order $name] < 0} {
+                lappend order $name
+            }
+        }
     }
     foreach name $order {
         if {[dict exists $byName $name]} {
@@ -679,6 +725,189 @@ proc ::svvs::sv_parser::portsFromModuleText {text moduleName} {
         lappend ports [dict get $byName $name]
     }
     return $ports
+}
+
+proc ::svvs::sv_parser::interfacesFromText {text} {
+    set interfaces {}
+    set clean [::svvs::sv_parser::stripComments $text]
+    foreach {full name body} [regexp -all -inline -nocase -- \
+            {(?is)\minterface\s+([A-Za-z_][A-Za-z0-9_$]*)(?:\s*#\s*\(.*?\))?(?:\s*\(.*?\))?\s*;(.*?)\mendinterface\M} $clean] {
+        set parameters [::svvs::sv_parser::parametersFromModuleText $body]
+        set signals [::svvs::sv_parser::interfaceSignalsFromBody $body $parameters]
+        set modports [::svvs::sv_parser::modportsFromInterfaceBody $body]
+        dict set interfaces $name [dict create name $name signals $signals modports $modports]
+    }
+    return $interfaces
+}
+
+proc ::svvs::sv_parser::interfaceSignalsFromBody {body {parameters {}}} {
+    set signals {}
+    foreach {full declaration} [regexp -all -inline -nocase -- \
+            {\m(?:logic|wire|reg)\M\s+([^;]+);} $body] {
+        set range ""
+        if {[regexp {\[[^]]+\]} $declaration range]} {
+            set declaration [string map [list $range " "] $declaration]
+        }
+        regsub -all -nocase {\m(signed|unsigned|tri|wand|wor)\M} $declaration " " declaration
+        set width [::svvs::sv_parser::widthFromRange $range $parameters]
+        foreach rawName [split $declaration ,] {
+            set nameText [string trim $rawName]
+            regsub {\s*=.*$} $nameText "" nameText
+            regsub -all {\[[^]]+\]} $nameText " " nameText
+            if {[regexp {^([A-Za-z_][A-Za-z0-9_$]*)$} [string trim $nameText] -> name]} {
+                dict set signals $name [dict create name $name width $width]
+            }
+        }
+    }
+    return $signals
+}
+
+proc ::svvs::sv_parser::modportsFromInterfaceBody {body} {
+    set modports {}
+    foreach {full name portsText} [regexp -all -inline -nocase -- \
+            {(?is)\mmodport\s+([A-Za-z_][A-Za-z0-9_$]*)\s*\((.*?)\)\s*;} $body] {
+        set ports {}
+        set currentDir ""
+        foreach raw [split $portsText ,] {
+            set item [string trim $raw]
+            if {$item eq ""} { continue }
+            if {[regexp -nocase {^(input|output|inout)\M\s*(.*)$} $item -> dir rest]} {
+                set currentDir [string tolower $dir]
+                set item [string trim $rest]
+            }
+            if {$currentDir eq ""} { continue }
+            regsub -all {\.[A-Za-z_][A-Za-z0-9_$]*$} $item "" item
+            regsub -all {\[[^]]+\]} $item " " item
+            if {[regexp {^([A-Za-z_][A-Za-z0-9_$]*)$} [string trim $item] -> portName]} {
+                set direction [expr {$currentDir eq "inout" ? "input" : $currentDir}]
+                lappend ports [dict create name $portName direction $direction]
+            }
+        }
+        dict set modports $name $ports
+    }
+    return $modports
+}
+
+proc ::svvs::sv_parser::interfacePortsFromHeaderItem {item interfaces {parameters {}}} {
+    set item [string trim $item]
+    regsub {\s*=.*$} $item "" item
+    if {![regexp {^([A-Za-z_][A-Za-z0-9_$]*)(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*))?\s+([A-Za-z_][A-Za-z0-9_$]*)$} \
+            $item -> interfaceName modportName instanceName]} {
+        return {}
+    }
+    set known [::svvs::sv_parser::knownInterfacePorts \
+        $interfaceName $modportName $instanceName $parameters]
+    if {[llength $known] > 0} {
+        return $known
+    }
+    if {![dict exists $interfaces $interfaceName]} {
+        return {}
+    }
+    return [::svvs::sv_parser::expandInterfacePort \
+        [dict get $interfaces $interfaceName] $modportName $instanceName]
+}
+
+proc ::svvs::sv_parser::parameterOrDefault {parameters names default} {
+    foreach name $names {
+        if {[dict exists $parameters $name]} {
+            return [dict get $parameters $name]
+        }
+    }
+    return $default
+}
+
+proc ::svvs::sv_parser::knownInterfacePorts {interfaceName modportName instanceName {parameters {}}} {
+    set normalizedInterface [string tolower $interfaceName]
+    set normalizedModport [string tolower $modportName]
+    if {$normalizedInterface ni {axi_lite axi4_lite axi4lite}} {
+        return {}
+    }
+    if {$normalizedModport ni {slave master slv mst ""}} {
+        return {}
+    }
+
+    set addrWidth [::svvs::sv_parser::parameterOrDefault \
+        $parameters {AXI_ADDR_WIDTH ADDR_WIDTH AXI_AW AXI_ADDR_W} 32]
+    set dataWidth [::svvs::sv_parser::parameterOrDefault \
+        $parameters {AXI_DATA_WIDTH DATA_WIDTH AXI_DW AXI_DATA_W} 32]
+    set strbWidth [expr {max(1, int($dataWidth / 8))}]
+
+    set slavePorts {
+        aw_addr  input  addr
+        aw_prot  input  prot
+        aw_valid input  1
+        aw_ready output 1
+        w_data   input  data
+        w_strb   input  strb
+        w_valid  input  1
+        w_ready  output 1
+        b_resp   output resp
+        b_valid  output 1
+        b_ready  input  1
+        ar_addr  input  addr
+        ar_prot  input  prot
+        ar_valid input  1
+        ar_ready output 1
+        r_data   output data
+        r_resp   output resp
+        r_valid  output 1
+        r_ready  input  1
+    }
+
+    set result {}
+    foreach {signal direction widthKey} $slavePorts {
+        switch -- $widthKey {
+            addr { set width $addrWidth }
+            data { set width $dataWidth }
+            strb { set width $strbWidth }
+            prot { set width 3 }
+            resp { set width 2 }
+            default { set width $widthKey }
+        }
+        if {$normalizedModport in {master mst}} {
+            set direction [expr {$direction eq "input" ? "output" : "input"}]
+        }
+        lappend result [dict create \
+            name "${instanceName}.${signal}" \
+            direction $direction \
+            width $width \
+            interface $instanceName \
+            interfaceSignal $signal]
+    }
+    return $result
+}
+
+proc ::svvs::sv_parser::expandInterfacePort {interface modportName instanceName} {
+    set signals [dict get $interface signals]
+    set result {}
+    set modports [dict get $interface modports]
+    if {$modportName ne "" && [dict exists $modports $modportName]} {
+        foreach port [dict get $modports $modportName] {
+            set signalName [dict get $port name]
+            set width 1
+            if {[dict exists $signals $signalName width]} {
+                set width [dict get $signals $signalName width]
+            }
+            lappend result [dict create \
+                name "${instanceName}.${signalName}" \
+                direction [dict get $port direction] \
+                width $width \
+                interface $instanceName \
+                interfaceSignal $signalName]
+        }
+        return $result
+    }
+
+    foreach signalName [lsort [dict keys $signals]] {
+        set signal [dict get $signals $signalName]
+        lappend result [dict create \
+            name "${instanceName}.${signalName}" \
+            direction input \
+            width [dict get $signal width] \
+            interface $instanceName \
+            interfaceSignal $signalName]
+    }
+    return $result
 }
 
 proc ::svvs::sv_parser::portOrderFromHeader {header} {
@@ -699,7 +928,7 @@ proc ::svvs::sv_parser::portOrderFromHeader {header} {
     return $order
 }
 
-proc ::svvs::sv_parser::declarationPortsFromModuleText {text moduleName {parameters {}}} {
+proc ::svvs::sv_parser::declarationPortsFromModuleText {text moduleName {parameters {}} {interfaces {}}} {
     set ports {}
     set seen {}
     set clean [::svvs::sv_parser::stripComments $text]
@@ -731,6 +960,17 @@ proc ::svvs::sv_parser::declarationPortsFromModuleText {text moduleName {paramet
             if {[dict exists $seen $name]} { continue }
             dict set seen $name 1
             lappend ports [dict create name $name direction $direction width $width]
+        }
+    }
+    foreach {full declaration} [regexp -all -inline -nocase -- \
+            {([A-Za-z_][A-Za-z0-9_$]*)(?:\s*\.\s*[A-Za-z_][A-Za-z0-9_$]*)?\s+[A-Za-z_][A-Za-z0-9_$]*\s*;} $module] {
+        set expanded [::svvs::sv_parser::interfacePortsFromHeaderItem \
+            [string trimright [string trim $declaration] ";"] $interfaces $parameters]
+        foreach port $expanded {
+            set name [dict get $port name]
+            if {[dict exists $seen $name]} { continue }
+            dict set seen $name 1
+            lappend ports $port
         }
     }
     return $ports
