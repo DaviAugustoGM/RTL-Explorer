@@ -129,6 +129,12 @@ O RTL Explorer usa ferramentas externas para transformar o RTL em algo executave
 - `Icarus Verilog`: motor alternativo para cenarios mais proximos de simulacao Verilog.
 - Simulador Python interno: fallback simples para alguns circuitos pequenos.
 
+O motor CXXRTL suporta clocks gerados internamente, por exemplo a saida `tick`
+de um divisor conectada a `always @(posedge tick)` de outro modulo. A build
+prepara esses clocks automaticamente, e a simulacao propaga as bordas ate o
+circuito estabilizar, inclusive em cascata, sem alterar os arquivos Verilog.
+O motor Python interno ainda nao suporta esse caso e orienta usar CXXRTL ou Icarus.
+
 A simulacao principal foi pensada para o diagrama de blocos: o usuario conecta blocos de entrada, saida e clock ao modulo que deseja testar.
 
 ## Maquinas de estado

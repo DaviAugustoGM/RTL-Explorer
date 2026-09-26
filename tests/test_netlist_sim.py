@@ -47,6 +47,25 @@ class NetlistSimulatorTest(unittest.TestCase):
         self.simulator.add_watch("__fsm_1", "demo", "current_state")
         self.assertEqual(self.values()["__fsm_1"], "0")
 
+    def test_generated_clock_requires_event_driven_engine(self):
+        module = {
+            "ports": {"clk": {"direction": "input", "bits": [2]}},
+            "netnames": {"generator.tick": {"bits": [3]}},
+            "cells": {
+                "divider": {"connections": {"CLK": [2], "Q": [3]}},
+                "consumer": {"connections": {"CLK": [3]}},
+            },
+        }
+        with self.assertRaisesRegex(ValueError, r"generator.tick.*Icarus"):
+            NETLIST_SIM.check_clock_sources(module)
+
+    def test_multiple_external_clock_bits_and_constants_are_allowed(self):
+        module = {
+            "ports": {"clocks": {"direction": "input", "bits": [2, 3]}},
+            "cells": {str(bit): {"connections": {"CLK": [bit]}} for bit in [2, 3, "0"]},
+        }
+        NETLIST_SIM.check_clock_sources(module)
+
     def test_unknown_cells_are_rejected_instead_of_ignored(self):
         design = {
             "modules": {

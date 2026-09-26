@@ -38,6 +38,33 @@ def mask(width):
     return (1 << width) - 1 if width > 0 else 0
 
 
+def check_clock_sources(module):
+    """The Python scheduler only captures externally driven clock edges."""
+    input_bits = {
+        bit for port in module.get("ports", {}).values()
+        if port.get("direction") == "input" for bit in port.get("bits", [])
+    }
+    internal_bits = {
+        bit for cell in module.get("cells", {}).values()
+        for bit in cell.get("connections", {}).get("CLK", [])
+        if isinstance(bit, int) and bit not in input_bits
+    }
+    if not internal_bits:
+        return
+    names = []
+    for bit in sorted(internal_bits):
+        aliases = [
+            name for name, net in module.get("netnames", {}).items()
+            if bit in net.get("bits", []) and not name.startswith("$")
+        ]
+        names.append(min(aliases, key=lambda name: (len(name), name)) if aliases else f"bit {bit}")
+    raise ValueError(
+        "Clock interno/gerado detectado: " + ", ".join(dict.fromkeys(names))
+        + ". O motor Python nao reconhece estas bordas. "
+        "Selecione CXXRTL, Icarus ou Automatic e execute Build and Run."
+    )
+
+
 class NetlistSimulator:
     def __init__(self, path: str, top: str):
         design = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -45,6 +72,7 @@ class NetlistSimulator:
             self.module = design["modules"][top]
         except KeyError as exc:
             raise ValueError(f"Modulo superior '{top}' nao existe no JSON.") from exc
+        check_clock_sources(self.module)
         self.ports = self.module.get("ports", {})
         self.netnames = self.module.get("netnames", {})
         self.watches = {}

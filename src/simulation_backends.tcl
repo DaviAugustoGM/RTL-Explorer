@@ -71,7 +71,7 @@ proc ::svvs::simulation_backends::removeStaleFiles {directory pattern keep} {
     }
 }
 
-proc ::svvs::simulation_backends::writeCxxrtlBridge {path model} {
+proc ::svvs::simulation_backends::writeCxxrtlBridge {path model {clocks {}}} {
     set allSignals [concat [dict get $model inputs] [dict get $model outputs]]
     foreach signal $allSignals {
         if {[dict get $signal width] > 64} {
@@ -101,6 +101,14 @@ proc ::svvs::simulation_backends::writeCxxrtlBridge {path model} {
         append setLines "                $keyword (part\[1\] == \"[::svvs::simulation_backends::cppString $name]\") { top->$field.set(value); found = true; }\n"
         set first 0
     }
+    set clockLines ""
+    foreach clock $clocks {
+        lassign $clock drive source
+        set drive [::svvs::simulation_backends::cxxrtlIdentifier $drive]
+        set source [::svvs::simulation_backends::cxxrtlIdentifier $source]
+        append clockLines "        { const auto value = top->$source.template get<unsigned>();\n"
+        append clockLines "          if (top->$drive.template get<unsigned>() != value) { top->$drive.set(value); changed = true; } }\n"
+    }
     set template {#include "cxxrtl_model.cpp"
 #include <iostream>
 #include <cctype>
@@ -115,6 +123,16 @@ using Top = cxxrtl_design::p_rtl__explorer__top;
 static std::unique_ptr<Top> top;
 static cxxrtl::debug_items debug;
 static std::map<std::string, std::string> watches;
+static void settle() {
+    // Apply all derived clock changes together, then settle the next delta cycle.
+    for (unsigned delta = 0; delta < 4096; ++delta) {
+        top->eval();
+        if (top->commit()) continue;
+        bool changed = false;
+@CLOCKS@        if (!changed) return;
+    }
+    throw std::runtime_error("Generated clocks did not settle after 4096 delta cycles");
+}
 static std::vector<std::string> fields(const std::string &line) {
     std::vector<std::string> result;
     std::stringstream stream(line);
@@ -165,7 +183,7 @@ static void emit_values() {
 int main() {
     try {
         top = std::make_unique<Top>();
-        top->step();
+        settle();
         rebuild_debug();
         std::cout << "READY";
 @READY@        std::cout << std::endl;
@@ -177,15 +195,15 @@ int main() {
             if (part[0] == "QUIT") break;
             if (part[0] == "RESET") {
                 top = std::make_unique<Top>();
-                top->step();
+                settle();
                 rebuild_debug();
             } else if (part[0] == "SET" && part.size() == 3) {
                 const auto value = std::stoull(part[2], nullptr, 0);
                 bool found = false;
 @SET@                if (!found) throw std::runtime_error("unknown input: " + part[1]);
-                top->step();
+                settle();
             } else if (part[0] == "EVAL") {
-                top->step();
+                settle();
             } else if (part[0] == "WATCH" && part.size() == 4) {
                 try {
                     watches[part[1]] = find_debug_item(part[2], part[3]);
@@ -206,12 +224,14 @@ int main() {
 }
 }
     set handle [open $path w]
-    puts $handle [string map [list @EMIT@ $emitLines @READY@ $readyLines @SET@ $setLines] $template]
+    puts $handle [string map [list @EMIT@ $emitLines @READY@ $readyLines @SET@ $setLines @CLOCKS@ $clockLines] $template]
     close $handle
 }
 
 proc ::svvs::simulation_backends::buildCxxrtl {result} {
     ::svvs::simulation_backends::progress "CXXRTL compile" 86
+    set python [::svvs::simulation_model::pythonExecutable]
+    if {$python eq ""} { error "Python was not found for CXXRTL clock preparation." }
     set compiler [::svvs::simulation_backends::compilerExecutable]
     set include [::svvs::simulation_backends::cxxrtlInclude]
     ::svvs::simulation_backends::buildLog "Motor CXXRTL selecionado."
@@ -221,11 +241,32 @@ proc ::svvs::simulation_backends::buildCxxrtl {result} {
         error "Yosys did not generate a CXXRTL model."
     }
     set build [file dirname [dict get $result cxxrtl]]
+    set clockJson [file join $build cxxrtl_clocks.json]
+    set clockCommand [list $python [file join $::APP_DIR cxxrtl_clocks.py] \
+        [dict get $result json] $::svvs::simulation_model::topModule $clockJson]
+    ::svvs::simulation_backends::buildLog "Preparando clocks CXXRTL: [::svvs::simulation_model::commandText $clockCommand]"
+    if {[catch {exec {*}$clockCommand 2>@1} output]} { error "CXXRTL clock preparation failed:\n$output" }
+    set clocks {}
+    foreach line [split [string trim $output] \n] {
+        if {$line ne ""} { lappend clocks [split [string trim $line] \t] }
+    }
+    if {[llength $clocks]} {
+        ::svvs::simulation_backends::buildLog "Clocks internos detectados: [llength $clocks]. Ativando propagacao de bordas CXXRTL."
+        set clockScript [file join $build cxxrtl_clocks.ys]
+        set handle [open $clockScript w]
+        puts $handle "read_json [::svvs::simulation_model::yosysQuote $clockJson]"
+        puts $handle "write_cxxrtl -O3 -g2 [::svvs::simulation_model::yosysQuote [dict get $result cxxrtl]]"
+        close $handle
+        set command [list [::svvs::simulation_model::yosysExecutable] -q -s $clockScript]
+        ::svvs::simulation_backends::buildLog "Modelo de clocks criado: $clockJson; script: $clockScript"
+        ::svvs::simulation_backends::buildLog "Executando Yosys: [::svvs::simulation_model::commandText $command]"
+        if {[catch {exec {*}$command 2>@1} output]} { error "CXXRTL clock model failed:\n$output" }
+    }
     set bridge [file join $build cxxrtl_bridge.cpp]
     set suffix [expr {$::tcl_platform(platform) eq "windows" ? ".exe" : ""}]
     set executable [file join $build "cxxrtl_simulator_[pid]${suffix}"]
     ::svvs::simulation_backends::removeStaleFiles $build "cxxrtl_simulator_*${suffix}" $executable
-    ::svvs::simulation_backends::writeCxxrtlBridge $bridge [dict get $result model]
+    ::svvs::simulation_backends::writeCxxrtlBridge $bridge [dict get $result model] $clocks
     ::svvs::simulation_backends::buildLog "Bridge CXXRTL criado: [file normalize $bridge]"
     set oldPath $::env(PATH)
     set separator [::svvs::toolchain::pathSeparator]
