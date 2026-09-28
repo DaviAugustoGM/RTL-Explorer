@@ -174,7 +174,7 @@ proc ::svvs::canvas_connections::autoConnect {} {
         }
     }
 
-    if {[llength $outputs] == 0 || [llength $inputs] == 0} {
+    if {[llength $inputs] == 0} {
         ::svvs::console::log "Conexao automatica: adicione blocos com entradas e saidas ao diagrama." warn
         return 0
     }
@@ -201,6 +201,11 @@ proc ::svvs::canvas_connections::autoConnect {} {
             set outputPort $::svvs::canvas_blocks::tagToPort($outputTag)
             set outputBlock $::svvs::canvas_blocks::tagToBlock($outputTag)
             if {$outputBlock eq $inputBlock} {
+                continue
+            }
+            set sourceModule [dict get [::svvs::canvas_blocks::portInfo $outputTag] module]
+            set targetModule [dict get [::svvs::canvas_blocks::portInfo $inputTag] module]
+            if {[dict exists $sourceModule structuralOwner] && [dict exists $targetModule structuralOwner]} {
                 continue
             }
             if {[string tolower [dict get $outputPort name]] ne $inputName} {
@@ -270,6 +275,9 @@ proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
     }
     set hints [::svvs::sv_parser::structuralConnectionsFromFiles \
         $::svvs::project_tree::projectFiles $moduleNames]
+    foreach warning $::svvs::sv_parser::structuralWarnings {
+        ::svvs::console::log "Auto Connect: $warning" warn
+    }
     if {[llength $hints] == 0} {
         return 0
     }
@@ -287,10 +295,10 @@ proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
             lassign $order sourceModuleKey sourcePortKey targetModuleKey targetPortKey
             set fromTag [::svvs::canvas_connections::uniquePortTag \
                 $outputs [dict get $hint $sourceModuleKey] [dict get $hint $sourcePortKey] \
-                [::svvs::canvas_connections::hintInstance $hint $sourceModuleKey]]
+                [::svvs::canvas_connections::hintInstance $hint $sourceModuleKey] [dict get $hint owner]]
             set toTag [::svvs::canvas_connections::uniquePortTag \
                 $inputs [dict get $hint $targetModuleKey] [dict get $hint $targetPortKey] \
-                [::svvs::canvas_connections::hintInstance $hint $targetModuleKey]]
+                [::svvs::canvas_connections::hintInstance $hint $targetModuleKey] [dict get $hint owner]]
             if {$fromTag eq "" || $toTag eq ""} {
                 continue
             }
@@ -309,6 +317,13 @@ proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
             set connWidth [dict get $rangeInfo width]
             set fromRange [dict get $rangeInfo fromRange]
             set toRange [dict get $rangeInfo toRange]
+            if {$fromRange eq "" && $toRange eq ""} {
+                set targetNet [::svvs::canvas_connections::fullPortComponent $toTag]
+                if {$fromTag in [dict get $targetNet ports] ||
+                    (![dict get $targetNet partial] && [llength [dict get $targetNet drivers]])} {
+                    continue
+                }
+            }
             dict set attempted "$fromTag|$toTag" 1
             if {[::svvs::canvas_connections::drawConnection \
                     $fromTag $toTag $connWidth $fromRange $toRange] ne ""} {
@@ -316,6 +331,31 @@ proc ::svvs::canvas_connections::autoConnectFromSources {outputs inputs} {
                 dict set existingPairs "$fromTag|$toTag" 1
                 incr created
             }
+        }
+    }
+    # Shared top-level inputs have no output endpoint among the placed children.
+    foreach hint $hints {
+        set from [::svvs::canvas_connections::uniquePortTag $inputs \
+            [dict get $hint fromModule] [dict get $hint fromPort] \
+            [dict get $hint fromInstance] [dict get $hint owner]]
+        set to [::svvs::canvas_connections::uniquePortTag $inputs \
+            [dict get $hint toModule] [dict get $hint toPort] \
+            [dict get $hint toInstance] [dict get $hint owner]]
+        if {$from eq "" || $to eq "" || $from eq $to} { continue }
+        set fromPort $::svvs::canvas_blocks::tagToPort($from)
+        set toPort $::svvs::canvas_blocks::tagToPort($to)
+        # Only identical slices can be joined as a whole shared input bus.
+        if {[dict get $hint fromRange] ne [dict get $hint toRange] ||
+            [dict get $fromPort width] != [dict get $toPort width]} { continue }
+        set a [::svvs::canvas_connections::fullPortComponent $from]
+        set b [::svvs::canvas_connections::fullPortComponent $to]
+        if {[dict get $a partial] || [dict get $b partial] ||
+            $to in [dict get $a ports]} { continue }
+        if {[llength [dict get $a drivers]] && [llength [dict get $b drivers]]} {
+            continue
+        }
+        if {[::svvs::canvas_connections::drawConnection $from $to [dict get $fromPort width]] ne ""} {
+            incr created
         }
     }
     if {$created > 0} {
@@ -386,13 +426,46 @@ proc ::svvs::canvas_connections::hintInstance {hint moduleKey} {
     return ""
 }
 
-proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName {instanceName ""}} {
+proc ::svvs::canvas_connections::fullPortComponent {tag} {
+    variable connections
+    set ports [list $tag]
+    set drivers {}
+    set partial 0
+    for {set index 0} {$index < [llength $ports]} {incr index} {
+        set current [lindex $ports $index]
+        if {[info exists ::svvs::canvas_blocks::tagToPort($current)] &&
+            [dict get $::svvs::canvas_blocks::tagToPort($current) direction] eq "output"} {
+            lappend drivers $current
+        }
+        foreach id [array names connections] {
+            set conn $connections($id)
+            set from [dict get $conn from]
+            set to [dict get $conn to]
+            if {$current ne $from && $current ne $to} { continue }
+            if {([dict exists $conn fromRange] && [dict get $conn fromRange] ne "") ||
+                ([dict exists $conn toRange] && [dict get $conn toRange] ne "")} {
+                set partial 1
+                continue
+            }
+            set peer [expr {$current eq $from ? $to : $from}]
+            if {$peer ni $ports} { lappend ports $peer }
+        }
+    }
+    return [dict create ports $ports drivers $drivers partial $partial]
+}
+
+proc ::svvs::canvas_connections::uniquePortTag {candidates moduleName portName {instanceName ""} {owner ""}} {
     set matches {}
     set instanceMatches {}
     foreach tag $candidates {
         set info [::svvs::canvas_blocks::portInfo $tag]
         set module [dict get $info module]
         set port [dict get $info port]
+        if {[dict exists $module structuralOwner] &&
+            (($owner ne "" && [dict get $module structuralOwner] ne $owner) ||
+             ($instanceName ne "" && [dict get $module instance] ne $instanceName))} {
+            continue
+        }
         if {[string equal -nocase [dict get $module name] $moduleName] &&
             [string equal -nocase [dict get $port name] $portName]} {
             lappend matches $tag

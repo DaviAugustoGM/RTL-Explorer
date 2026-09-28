@@ -3,6 +3,7 @@ namespace eval ::svvs::project_tree {
     variable titleWidget ""
     variable sampleModules {}
     variable projectFiles {}
+    variable projectDirectory ""
     variable projectName "rtl_project"
     variable projectOpen 1
     variable fsms {}
@@ -193,8 +194,9 @@ proc ::svvs::project_tree::showProject {} {
     }
 }
 
-proc ::svvs::project_tree::loadProjectFiles {files name} {
+proc ::svvs::project_tree::loadProjectFiles {files name {directory ""}} {
     variable projectFiles
+    variable projectDirectory
     variable projectName
     variable sampleModules
     variable projectOpen
@@ -207,6 +209,7 @@ proc ::svvs::project_tree::loadProjectFiles {files name} {
         lappend projectFiles [file normalize $file]
     }
     set projectName $name
+    set projectDirectory $directory
     set projectOpen 1
 
     set parsedModules [::svvs::sv_parser::parseModulesFromFiles $projectFiles]
@@ -230,8 +233,117 @@ proc ::svvs::project_tree::loadProjectFiles {files name} {
     ::svvs::project_tree::showProject
 }
 
+proc ::svvs::project_tree::refreshModules {} {
+    variable projectFiles
+    variable projectDirectory
+    variable sampleModules
+    variable fsms
+    if {![llength $projectFiles] && $projectDirectory eq ""} {
+        ::svvs::console::log "Abra arquivos ou uma pasta antes de atualizar os modulos." warn
+        return 0
+    }
+    if {$::svvs::simulator_view::busyActive} {
+        ::svvs::console::log "Aguarde a build terminar antes de atualizar os modulos." warn
+        return 0
+    }
+    set files {}
+    set candidates $projectFiles
+    if {$projectDirectory ne ""} {
+        if {![file isdirectory $projectDirectory] ||
+            [catch {set candidates [::svvs::layout::findSystemVerilogFiles $projectDirectory]} message]} {
+            ::svvs::console::log "Nao foi possivel reler a pasta: $projectDirectory" warn
+            return 0
+        }
+    }
+    foreach path $candidates {
+        if {[file exists $path]} {
+            lappend files $path
+        } else {
+            ::svvs::console::log "Arquivo nao encontrado durante atualizacao: $path" warn
+        }
+    }
+    if {[catch {
+        set modules [::svvs::sv_parser::parseModulesFromFiles $files]
+        set machines [::svvs::sv_parser::parseFsmsFromFiles $files]
+    } message]} {
+        ::svvs::console::log "Falha ao atualizar modulos: $message" error
+        return 0
+    }
+    set diagram [::svvs::canvas_blocks::exportDiagramData]
+    set connections [::svvs::canvas_connections::exportConnectionData]
+    set nodes {}
+    set changedPorts {}
+    foreach node [dict get $diagram nodes] {
+        set old [dict get $node module]
+        set replacement ""
+        if {![::svvs::simulation_components::isBuiltin $old]} {
+            foreach candidate $modules {
+                if {[dict get $candidate name] eq [dict get $old name] &&
+                    (![dict exists $old sourcePath] ||
+                     [dict get $candidate sourcePath] eq [dict get $old sourcePath])} {
+                    set replacement $candidate
+                    break
+                }
+            }
+            if {$replacement eq ""} {
+                ::svvs::console::log "Modulo [dict get $old name] nao encontrado; bloco existente preservado." warn
+            }
+        }
+        if {$replacement ne ""} {
+            foreach key {instance structuralOwner} {
+                if {[dict exists $old $key]} { dict set replacement $key [dict get $old $key] }
+            }
+            foreach port [dict get $old ports] {
+                set unchanged 0
+                foreach newPort [dict get $replacement ports] {
+                    if {[dict get $port name] eq [dict get $newPort name] &&
+                        [dict get $port width] == [dict get $newPort width] &&
+                        [dict get $port direction] eq [dict get $newPort direction]} {
+                        set unchanged 1
+                        break
+                    }
+                }
+                if {!$unchanged} {
+                    dict set changedPorts "port:[dict get $node id]:[dict get $port name]" 1
+                }
+            }
+            dict set node module $replacement
+        }
+        lappend nodes $node
+    }
+    set kept {}
+    foreach conn $connections {
+        if {[dict exists $changedPorts [dict get $conn from]] ||
+            [dict exists $changedPorts [dict get $conn to]]} {
+            ::svvs::console::log "Conexao removida por alteracao de porta: [dict get $conn from] -> [dict get $conn to]" warn
+        } else {
+            lappend kept $conn
+        }
+    }
+    ::svvs::simulator_view::clearBuildCache
+    set projectFiles $files
+    set sampleModules $modules
+    set fsms $machines
+    dict set diagram nodes $nodes
+    ::svvs::canvas_blocks::clearCanvas
+    ::svvs::canvas_blocks::importDiagramData $diagram
+    ::svvs::canvas_connections::importConnectionData $kept
+    ::svvs::canvas_connections::refreshAll
+    if {[::svvs::project_tree::modeIsBlocks]} {
+        ::svvs::project_tree::showBlockLibrary
+    } else {
+        ::svvs::project_tree::showProject
+    }
+    ::svvs::fsm_viewer::showEmpty "Selecione um modulo para ver a maquina de estados atualizada."
+    ::svvs::properties_panel::showWelcome
+    ::svvs::console::log "Modulos atualizados: [llength $modules]. Use Build and Run para simular as alteracoes." ok
+    return 1
+}
+
 proc ::svvs::project_tree::closeProject {} {
     variable projectFiles
+    variable projectDirectory
+    set projectDirectory ""
     variable projectName
     variable sampleModules
     variable projectOpen
@@ -261,6 +373,7 @@ proc ::svvs::project_tree::closeProject {} {
 
 proc ::svvs::project_tree::exportProjectData {} {
     variable projectFiles
+    variable projectDirectory
     variable projectName
     variable projectOpen
     variable sampleModules
@@ -270,12 +383,15 @@ proc ::svvs::project_tree::exportProjectData {} {
         open $projectOpen \
         name $projectName \
         files $projectFiles \
+        directory $projectDirectory \
         modules $sampleModules \
         fsms $fsms]
 }
 
 proc ::svvs::project_tree::importProjectData {data} {
     variable projectFiles
+    variable projectDirectory
+    set projectDirectory [expr {[dict exists $data directory] ? [dict get $data directory] : ""}]
     variable projectName
     variable projectOpen
     variable sampleModules

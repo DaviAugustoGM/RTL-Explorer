@@ -144,9 +144,12 @@ proc ::svvs::sv_parser::stripComments {text} {
 }
 
 proc ::svvs::sv_parser::moduleText {text moduleName} {
-    set pattern [format {(?is)\mmodule\s+%s\M.*?\mendmodule\M} $moduleName]
-    if {[regexp -- $pattern $text match]} {
-        return $match
+    set escaped [regsub -all {([][(){}.*+?^$\\|])} $moduleName {\\\1}]
+    set pattern [format {\mmodule\s+%s\M} $escaped]
+    if {[regexp -nocase -indices -- $pattern $text declaration] &&
+        [regexp -nocase -indices -start [expr {[lindex $declaration 1] + 1}] -- \
+            {\mendmodule\M} $text ending]} {
+        return [string range $text [lindex $declaration 0] [lindex $ending 1]]
     }
     return $text
 }
@@ -366,8 +369,15 @@ proc ::svvs::sv_parser::moduleNamesFromText {text} {
 }
 
 proc ::svvs::sv_parser::structuralConnectionsFromFiles {paths moduleNames} {
+    variable structuralWarnings
+    set structuralWarnings {}
     set hints {}
     set instances [::svvs::sv_parser::structuralInstantiationsFromFiles $paths "" $moduleNames]
+    foreach inst $instances {
+        if {[dict exists $inst diagnostic]} {
+            lappend structuralWarnings "[dict get $inst owner].[dict get $inst instance]: [dict get $inst diagnostic]"
+        }
+    }
     foreach hint [::svvs::sv_parser::connectionHintsFromInstantiations $instances] {
         lappend hints $hint
     }
@@ -457,8 +467,19 @@ proc ::svvs::sv_parser::moduleInstantiationsFromText {text ownerModule moduleNam
                 continue
             }
             set mapText [string range $text [expr {$pos + 1}] [expr {$close - 1}]]
+            set named 0
+            set positional 0
+            foreach entry [::svvs::sv_parser::splitTopLevelCommas $mapText] {
+                if {[string match .* [string trim $entry]]} { incr named } else { incr positional }
+            }
+            if {$named && $positional} {
+                lappend instances [dict create type $type instance $instance ports {} diagnostic \
+                    "Conexoes por nome e por posicao misturadas. Use .porta(sinal) em todas as portas ou somente sinais em ordem."]
+                set offset [expr {$close + 1}]
+                continue
+            }
             set ports [::svvs::sv_parser::namedPortMapFromText $mapText]
-            if {[dict size $ports] == 0 && [dict exists $modulePortOrder $type]} {
+            if {!$named && [dict exists $modulePortOrder $type]} {
                 set ports [::svvs::sv_parser::positionalPortMapFromText \
                     $mapText [dict get $modulePortOrder $type]]
             }
@@ -473,22 +494,25 @@ proc ::svvs::sv_parser::connectionHintsFromInstantiations {instances} {
     set byNet {}
     set hints {}
     foreach inst $instances {
+        set owner [expr {[dict exists $inst owner] ? [dict get $inst owner] : ""}]
         dict for {port endpoint} [dict get $inst ports] {
             set net [dict get $endpoint net]
             if {$net eq ""} { continue }
-            dict lappend byNet $net [dict create \
+            dict lappend byNet [list $owner $net] [dict create \
                 module [dict get $inst type] \
                 instance [dict get $inst instance] \
                 port $port \
                 range [dict get $endpoint range]]
         }
     }
-    dict for {net endpoints} $byNet {
+    dict for {key endpoints} $byNet {
+        lassign $key owner net
         if {[llength $endpoints] < 2} { continue }
         foreach a $endpoints {
             foreach b $endpoints {
                 if {$a eq $b} { continue }
                 lappend hints [dict create \
+                    owner $owner \
                     net $net \
                     fromModule [dict get $a module] \
                     fromInstance [dict get $a instance] \

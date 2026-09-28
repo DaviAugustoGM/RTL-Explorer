@@ -1,3 +1,5 @@
+source [file join [file dirname [info script]] project_paths.tcl]
+
 namespace eval ::svvs::layout {
     variable widgets
     variable icons
@@ -44,6 +46,7 @@ proc ::svvs::layout::createTopbar {parent} {
 
     foreach item {
         {"File" {::svvs::layout::showFileMenu %W}}
+        {"Refresh" {::svvs::project_tree::refreshModules}}
         {"Auto Connect" {::svvs::layout::showAutoConnectMenu %W}}
         {"Run" {::svvs::simulator_view::run}}
         {"Build and Run" {::svvs::simulator_view::buildAndRun}}
@@ -74,7 +77,13 @@ proc ::svvs::layout::createTopbar {parent} {
         bind $top.$name <Leave> [list ::svvs::layout::restoreToolbarWidget $top.$name]
         bind $top.$name <Button-1> $command
         pack $top.$name -side left -padx 0 -pady 0
+        if {$text eq "Refresh"} {
+            $top.$name configure -text "Refresh modules"
+            bind $top.$name <Enter> +[list ::svvs::layout::showTooltip $top.$name "Refresh modules (F5)"]
+            bind $top.$name <Leave> +{::svvs::layout::hideTooltip}
+        }
     }
+    bind [winfo toplevel $parent] <F5> {::svvs::project_tree::refreshModules}
     label $top.busyLabel \
         -text "" \
         -background [::svvs::theme::color topbar] \
@@ -134,6 +143,8 @@ proc ::svvs::layout::showFileMenu {widget} {
     .fileMenu add separator
     .fileMenu add command -label "Open Files" -command {::svvs::layout::openFiles}
     .fileMenu add command -label "Open Folder" -command {::svvs::layout::openFolder}
+    .fileMenu add command -label "Refresh Modules" -accelerator F5 \
+        -command {::svvs::project_tree::refreshModules}
     .fileMenu add command -label "Samples" -command {::svvs::layout::openSamples}
     .fileMenu add separator
     .fileMenu add command -label "Save Project" -command {::svvs::layout::saveProject}
@@ -216,7 +227,7 @@ proc ::svvs::layout::openFolderPath {dir} {
     }
 
     ::svvs::simulator_view::clearBuildCache
-    ::svvs::project_tree::loadProjectFiles $files [file tail $dir]
+    ::svvs::project_tree::loadProjectFiles $files [file tail $dir] [file normalize $dir]
     ::svvs::console::log "Pasta carregada: $dir"
     ::svvs::console::log "Arquivos Verilog/SystemVerilog encontrados: [llength $files]" ok
 }
@@ -295,6 +306,10 @@ proc ::svvs::layout::openProjectFrom {path} {
         return 0
     }
 
+    if {[catch {set data [::svvs::project_paths::convert $data $path resolve]} err]} {
+        ::svvs::console::log "Erro ao localizar arquivos do projeto: $err" error
+        return 0
+    }
     ::svvs::simulator_view::clearBuildCache
     ::svvs::canvas_blocks::clearCanvas
     if {[dict exists $data project]} {
@@ -365,6 +380,7 @@ proc ::svvs::layout::saveProjectTo {path} {
         simulationEngine $::svvs::simulation_backends::selectedEngine]
 
     if {[catch {
+        set data [::svvs::project_paths::convert $data $path relative]
         set fh [open $path w]
         fconfigure $fh -encoding utf-8 -translation lf
         puts $fh $data
