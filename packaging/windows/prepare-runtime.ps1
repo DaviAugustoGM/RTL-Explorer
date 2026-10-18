@@ -28,11 +28,21 @@ $Versions = @{
 $Cache = Join-Path $RepoRoot 'dist\downloads'
 
 function Get-Download([string]$Url, [string]$Destination) {
+    $LocalDownload = Join-Path $RepoRoot ('.tools\downloads\' + (Split-Path $Destination -Leaf))
+    if (Test-Path -LiteralPath $LocalDownload) {
+        New-Item -ItemType Directory -Force (Split-Path $Destination) | Out-Null
+        if (-not (Test-Path -LiteralPath $Destination) -or
+            (Get-FileHash -LiteralPath $LocalDownload).Hash -ne (Get-FileHash -LiteralPath $Destination).Hash) {
+            Copy-Item -LiteralPath $LocalDownload -Destination $Destination -Force
+        }
+    }
     if (Test-Path -LiteralPath $Destination) { return }
     New-Item -ItemType Directory -Force (Split-Path $Destination) | Out-Null
     Write-Host "Downloading $(Split-Path $Destination -Leaf)..."
-    & curl.exe -L --fail --retry 3 --output $Destination $Url
+    $Partial = "$Destination.partial"
+    & curl.exe -L --fail --retry 3 --output $Partial $Url
     if ($LASTEXITCODE -ne 0) { throw "Download failed: $Url" }
+    Move-Item -LiteralPath $Partial -Destination $Destination -Force
 }
 
 function Copy-Directory([string]$Source, [string]$Destination) {
@@ -72,7 +82,11 @@ function Copy-OssCadRuntime([string]$Source, [string]$Destination) {
         Copy-Item -Destination $LibDestination -Force
 
     Copy-Directory (Join-Path $LibSource 'ivl') (Join-Path $LibDestination 'ivl')
-    Copy-Directory (Join-Path $LibSource 'python3.11') (Join-Path $LibDestination 'python3.11')
+    $PythonDestination = Join-Path $LibDestination 'python3.11'
+    New-Item -ItemType Directory -Force $PythonDestination | Out-Null
+    Get-ChildItem (Join-Path $LibSource 'python3.11') |
+        Where-Object { $_.Name -notin @('site-packages', 'test', 'idlelib', 'ensurepip', '__pycache__') } |
+        Copy-Item -Destination $PythonDestination -Recurse -Force
     foreach ($name in @('site-packages', 'test', 'idlelib', 'ensurepip')) {
         Remove-StageItem (Join-Path $LibDestination "python3.11\$name")
     }
@@ -151,22 +165,30 @@ Get-ChildItem $StageDirectory -Recurse -File -Filter '*.pyc' | Remove-Item -Forc
 # Tcl/Tk is installed into staging once, then embedded in the final installer.
 $TclDestination = Join-Path $StageDirectory 'runtime\tcl'
 $LocalTcl = 'D:\RTL_EXP_tools\downloads\tcl-test'
-if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalTcl 'bin\wish86.exe'))) {
+$ProjectTcl = Join-Path $RepoRoot '.tools\tcl'
+if (Test-Path -LiteralPath (Join-Path $ProjectTcl 'bin\wish86.exe')) {
+    $LocalTcl = $ProjectTcl
+}
+if ((Test-Path -LiteralPath (Join-Path $LocalTcl 'bin\wish86.exe')) -and
+    ($ReuseLocalTools -or $LocalTcl -eq $ProjectTcl)) {
+    Write-Host "Reusing Tcl/Tk from $LocalTcl"
     Copy-Directory $LocalTcl $TclDestination
 } else {
     $TclInstaller = Join-Path $Cache "SetupTcl-$($Versions.Tcl)-x64_Bawt-$($Versions.Bawt).exe"
     Get-Download "https://www.bawt.tcl3d.org/download/Tcl-Pure/SetupTcl-$($Versions.Tcl)-x64_Bawt-$($Versions.Bawt).exe" $TclInstaller
     New-Item -ItemType Directory -Force (Split-Path $TclDestination) | Out-Null
-    $process = Start-Process -FilePath $TclInstaller -Wait -PassThru -ArgumentList @(
-        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$TclDestination`""
+    $process = Start-Process -FilePath $TclInstaller -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
+        '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$TclDestination`""
     )
     if ($process.ExitCode -ne 0) {
+        # Do not reuse a broken installer on the next build attempt.
+        Move-Item -LiteralPath $TclInstaller -Destination "$TclInstaller.failed" -Force
         if (Test-Path -LiteralPath (Join-Path $LocalTcl 'bin\wish86.exe')) {
             Write-Warning "Tcl/Tk installer failed with code $($process.ExitCode). Reusing local Tcl/Tk runtime."
             Remove-StageItem $TclDestination
             Copy-Directory $LocalTcl $TclDestination
         } else {
-            throw "Tcl/Tk staging failed with code $($process.ExitCode)."
+            throw "Tcl/Tk staging failed with code $($process.ExitCode). The cached installer was moved to $TclInstaller.failed; rerun to download it again, or run scripts\install-windows-dependencies.ps1 first."
         }
     }
 }
@@ -178,9 +200,15 @@ $ToolsDestination = Join-Path $StageDirectory 'tools'
 New-Item -ItemType Directory -Force $ToolsDestination | Out-Null
 
 $LocalOss = 'D:\RTL_EXP_tools\oss-cad-suite\oss-cad-suite'
+$ProjectOss = Join-Path $RepoRoot '.tools\oss-cad-suite'
+if (Test-Path -LiteralPath (Join-Path $ProjectOss 'bin\yosys.exe')) {
+    $LocalOss = $ProjectOss
+}
 $OssDestination = Join-Path $ToolsDestination 'oss-cad-suite'
-if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalOss 'bin\yosys.exe'))) {
-    Copy-Directory $LocalOss $OssDestination
+if ((Test-Path -LiteralPath (Join-Path $LocalOss 'bin\yosys.exe')) -and
+    ($ReuseLocalTools -or $LocalOss -eq $ProjectOss)) {
+    Write-Host "Reusing OSS CAD Suite from $LocalOss"
+    Copy-OssCadRuntime $LocalOss $OssDestination
 } else {
     $OssInstaller = Join-Path $Cache "oss-cad-suite-windows-x64-$($Versions.OssCadFile).exe"
     $OssExtract = Join-Path $Cache "oss-cad-suite-$($Versions.OssCadFile)"
@@ -209,8 +237,14 @@ if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalOss 'bin\yosy
 Reduce-OssCadRuntime $OssDestination
 
 $LocalCompiler = 'D:\RTL_EXP_tools\w64devkit\w64devkit'
+$ProjectCompiler = Join-Path $RepoRoot '.tools\w64devkit'
+if (Test-Path -LiteralPath (Join-Path $ProjectCompiler 'bin\g++.exe')) {
+    $LocalCompiler = $ProjectCompiler
+}
 $CompilerDestination = Join-Path $ToolsDestination 'w64devkit'
-if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalCompiler 'bin\g++.exe'))) {
+if ((Test-Path -LiteralPath (Join-Path $LocalCompiler 'bin\g++.exe')) -and
+    ($ReuseLocalTools -or $LocalCompiler -eq $ProjectCompiler)) {
+    Write-Host "Reusing C++ compiler from $LocalCompiler"
     Copy-Directory $LocalCompiler $CompilerDestination
 } else {
     $CompilerArchive = Join-Path $Cache "w64devkit-x64-$($Versions.W64DevKit).7z.exe"
@@ -225,13 +259,16 @@ if ($ReuseLocalTools -and (Test-Path -LiteralPath (Join-Path $LocalCompiler 'bin
 }
 Remove-StageItem (Join-Path $CompilerDestination 'src')
 
-$Sv2vArchive = Join-Path $Cache "sv2v-Windows-$($Versions.Sv2v).zip"
-$Sv2vExtract = Join-Path $Cache "sv2v-Windows-$($Versions.Sv2v)"
-Get-Download "https://github.com/zachjs/sv2v/releases/download/v$($Versions.Sv2v)/sv2v-Windows.zip" $Sv2vArchive
-if (-not (Test-Path -LiteralPath $Sv2vExtract)) {
-    Expand-Archive -LiteralPath $Sv2vArchive -DestinationPath $Sv2vExtract
+$Sv2vExecutable = Get-ChildItem (Join-Path $RepoRoot '.tools\sv2v') -Recurse -Filter sv2v.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $Sv2vExecutable) {
+    $Sv2vArchive = Join-Path $Cache "sv2v-Windows-$($Versions.Sv2v).zip"
+    $Sv2vExtract = Join-Path $Cache "sv2v-Windows-$($Versions.Sv2v)"
+    Get-Download "https://github.com/zachjs/sv2v/releases/download/v$($Versions.Sv2v)/sv2v-Windows.zip" $Sv2vArchive
+    if (-not (Test-Path -LiteralPath $Sv2vExtract)) {
+        Expand-Archive -LiteralPath $Sv2vArchive -DestinationPath $Sv2vExtract
+    }
+    $Sv2vExecutable = Get-ChildItem $Sv2vExtract -Recurse -Filter sv2v.exe | Select-Object -First 1
 }
-$Sv2vExecutable = Get-ChildItem $Sv2vExtract -Recurse -Filter sv2v.exe | Select-Object -First 1
 if (-not $Sv2vExecutable) { throw 'sv2v.exe was not found in its release archive.' }
 $Sv2vDestination = Join-Path $ToolsDestination 'sv2v'
 New-Item -ItemType Directory -Force $Sv2vDestination | Out-Null

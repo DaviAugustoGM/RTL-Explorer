@@ -152,6 +152,12 @@ O instalador sera gerado em:
 dist\windows\RTL-Explorer-Setup.exe
 ```
 
+Se as dependencias foram instaladas com `scripts/install-windows-dependencies.ps1`,
+o empacotamento reutiliza automaticamente Tcl/Tk, OSS CAD Suite, sv2v e C++ da
+pasta `.tools`. Nao e necessario baixa-los ou instalar Tcl/Tk novamente.
+Altere `AppVersion` em `packaging/windows/rtl-explorer.iss` para definir a versao
+exibida pelo instalador; isso nao altera a versao das dependencias.
+
 Se ja houver ferramentas baixadas em `D:\RTL_EXP_tools`, use:
 
 ```powershell

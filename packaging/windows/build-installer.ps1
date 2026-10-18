@@ -32,7 +32,7 @@ if (-not $Candidates) {
     New-Item -ItemType Directory -Force (Split-Path $Installer) | Out-Null
     & curl.exe -L --fail --retry 3 --output $Installer 'https://jrsoftware.org/download.php/is.exe'
     if ($LASTEXITCODE -ne 0) { throw 'Could not download Inno Setup.' }
-    $process = Start-Process -FilePath $Installer -Wait -PassThru -ArgumentList @(
+    $process = Start-Process -FilePath $Installer -WindowStyle Hidden -Wait -PassThru -ArgumentList @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER'
     )
     if ($process.ExitCode -ne 0) { throw 'Could not install Inno Setup.' }
