@@ -32,6 +32,33 @@ O modo FSM detecta maquinas de estado no RTL, mostra transicoes, condicoes, loop
 - Monta diagramas de blocos arrastaveis a partir dos modulos do usuario.
 - Permite conexoes manuais, conexoes automaticas e conexoes por faixa de bits.
 - Possui blocos internos para entrada, saida, clock, reset e constantes.
+- Possui bloco LED em `Built-in blocks > Simulation I/O`, com cores azul,
+  vermelho, verde, amarelo e branco. Use o botao direito no LED para escolher
+  a cor e se ele acende com 1 ou com 0. O LED acompanha o sinal durante a
+  simulacao; suas configuracoes sao salvas no projeto. A largura se adapta ao
+  sinal conectado, com um LED por bit no mesmo retangulo (bit mais significativo
+  a esquerda e bit 0 a direita). Use `Connection bit range` para observar apenas
+  uma faixa do barramento.
+- Possui bloco `switch` em `Built-in blocks > Simulation I/O`: clique na
+  alavanca para alternar entre 0 e 1. Em barramentos, cada bit tem sua propria
+  alavanca dentro do mesmo bloco. O estado e salvo no projeto e os cliques
+  atualizam a entrada durante a simulacao. No menu do botao direito, use
+  `Valor ao levantar` para escolher se a alavanca levantada envia 1 ou 0;
+  a alavanca abaixada envia o valor oposto.
+- Possui `push_button` em `Built-in blocks > Simulation I/O`, com um botao
+  por bit e suporte a `Connection bit range`. O botao so fica acionado enquanto
+  o mouse estiver pressionado; ao soltar, mesmo fora dele, volta ao repouso.
+  No menu do botao direito, `Valor ao pressionar` escolhe entre enviar 1 ou 0;
+  em repouso envia o valor oposto. Permite renomear, redimensionar e exibir a
+  waveform, como o switch. A configuracao e salva com o botao em repouso.
+- Possui `seven_segment_display` em `Built-in blocks > Simulation I/O`, um
+  display com segmentos acesos vermelhos e apagados ocultos, com entrada
+  `segments` fixa de 7 bits. Use a alca do canto para aumentar ou diminuir o
+  display; largura e altura mudam juntas, preservando a proporcao dos segmentos. Os bits
+  0 a 6 controlam os segmentos a, b, c, d, e, f e g, respectivamente: superior,
+  superior direito, inferior direito, inferior, inferior esquerdo, superior
+  esquerdo e central. Por exemplo, `0x3F` desenha 0 e `0x06` desenha 1 quando
+  ativo em 1. No botao direito, escolha `Ativar segmentos com` 1 ou 0.
 - Permite autoconectar blocos de entrada/saida aos modulos selecionados.
 - Suporta nomes editaveis, formatos binario/decimal/hexadecimal e mapeamento de valores para texto.
 - Mostra waveforms ao vivo no proprio modo de diagrama.
@@ -54,18 +81,41 @@ RTL-Explorer-Setup.exe
 
 O instalador inclui Tcl/Tk, Yosys, sv2v, Icarus Verilog e o compilador C++ usado pelo motor CXXRTL.
 
-Durante o desenvolvimento, tambem e possivel executar direto pelo codigo:
+### Windows: executar o codigo baixado do GitHub
+
+Em Windows 10/11 de 64 bits, extraia o ZIP do GitHub (ou clone o repositorio),
+abra o PowerShell na pasta que contem este README e execute:
 
 ```powershell
-wish src/main.tcl
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows-dependencies.ps1
 ```
 
-Ou, a partir da nova pasta do projeto:
+O script baixa Tcl/Tk 8.6.17, OSS CAD Suite 2026-07-05 (Yosys, Python,
+Icarus Verilog e arquivos CXXRTL), sv2v 0.0.13 e w64devkit 2.8.0 (C++).
+As ferramentas ficam em `.tools`, dentro do projeto, sem precisar configurar
+o PATH global ou instalar Python separadamente. A instalacao precisa de internet
+e varios GB livres; os downloads sao mantidos em `.tools/downloads` para reutilizacao.
+O script pode ser executado novamente para completar uma instalacao interrompida.
+
+Depois, abra o programa com duplo clique em `run-windows.cmd` ou execute:
 
 ```powershell
-cd D:\RTL_EXP
-wish src\main.tcl
+.\run-windows.cmd
 ```
+
+O inicializador usa o Tcl/Tk local, mesmo que outra versao esteja no PATH.
+Para conferir novamente as dependencias:
+
+```powershell
+.\.tools\tcl\bin\tclsh86.exe .\scripts\check-toolchain.tcl
+```
+
+Evite espacos no caminho do projeto: o Icarus Verilog para Windows pode falhar
+ao chamar seus programas auxiliares quando o caminho da instalacao contem espacos.
+Por exemplo, prefira `D:\RTL-Explorer`.
+
+Se voce ja configurou todas as ferramentas manualmente, pode usar
+`wish src/main.tcl` diretamente.
 
 ### Linux
 
@@ -118,6 +168,9 @@ powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-installer.ps1
 6. Use `Build and Run` para sintetizar e iniciar a simulacao.
 7. Use `Run`, `Pause`, `Stop` e `Step` para controlar a simulacao.
 8. Ative `Waveforms` para acompanhar sinais em tempo real.
+9. Ative `Lock blocks` na barra superior para bloquear o movimento e o
+   redimensionamento dos componentes durante a simulacao. Switches, push buttons
+   e entradas continuam funcionando. Clique novamente para liberar o layout.
 
 ## Simulacao
 

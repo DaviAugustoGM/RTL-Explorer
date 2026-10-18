@@ -52,6 +52,7 @@ proc ::svvs::layout::createTopbar {parent} {
         {"Build and Run" {::svvs::simulator_view::buildAndRun}}
         {"Pause" {::svvs::simulator_view::pause}}
         {"Stop" {::svvs::simulator_view::stop}}
+        {"Lock blocks" {::svvs::canvas_blocks::toggleMovementLock}}
         {"Names" {::svvs::canvas_blocks::togglePortNames}}
         {"Simple Wires" {::svvs::canvas_connections::toggleSimplified}}
         {"Wires" {::svvs::canvas_connections::toggleWires}}
@@ -102,6 +103,7 @@ proc ::svvs::layout::createTopbar {parent} {
         -borderwidth 0
     pack $parent.topbarDivider -side top -fill x
     ::svvs::layout::setToolbarActive "Names" 1
+    ::svvs::layout::setToolbarActive "Lock blocks" $::svvs::canvas_blocks::movementLocked
     ::svvs::layout::setToolbarActive "Wires" 1
     ::svvs::layout::setToolbarActive "Waveforms" $::svvs::simulator_view::waveformsEnabled
 }

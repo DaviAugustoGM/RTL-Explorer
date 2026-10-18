@@ -120,13 +120,13 @@ proc ::svvs::simulation_model::diagramModel {} {
             set module [dict get $record module]
             set kind [::svvs::simulation_components::kind $module]
             lappend widths [dict get $port width]
-            if {$kind in {input clock} && [dict get $port direction] eq "output"} {
+            if {$kind in {input clock switch push_button} && [dict get $port direction] eq "output"} {
                 lappend virtualSources $record
             } elseif {[dict get $port direction] eq "output"} {
                 lappend drivers $record
             } else {
                 lappend sinks $record
-                if {$kind eq "probe"} { lappend probes $record }
+                if {$kind in {probe led seven_segment}} { lappend probes $record }
             }
         }
         set widths [lsort -unique -integer $widths]

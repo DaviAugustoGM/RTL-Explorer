@@ -498,7 +498,19 @@ proc ::svvs::project_tree::builtinModules {group} {
                     [dict create name in direction input width 1]]] \
                 [dict create name clock_generator instance clock simulationKind clock \
                     builtin 1 simulationConfig [dict create frequency 1.0 trace 1 bitWidth 1 label "" nameAssigned 0] ports [list \
-                    [dict create name clk direction output width 1]]]]
+                    [dict create name clk direction output width 1]]] \
+                [dict create name led instance led simulationKind led \
+                    builtin 1 simulationConfig [dict create activeLevel 1 ledColor red trace 1 bitWidth 1 label "" nameAssigned 0] ports [list \
+                    [dict create name in direction input width 1]]] \
+                [dict create name switch instance switch simulationKind switch \
+                    builtin 1 simulationConfig [dict create value 0 raisedValue 1 base bin trace 1 bitWidth 1 label "" nameAssigned 0] ports [list \
+                    [dict create name out direction output width 1]]] \
+                [dict create name seven_segment_display instance display7 simulationKind seven_segment \
+                    builtin 1 simulationConfig [dict create activeLevel 1 trace 1 bitWidth 7 base bin label "" nameAssigned 0] ports [list \
+                    [dict create name segments direction input width 7]]] \
+                [dict create name push_button instance button simulationKind push_button \
+                    builtin 1 simulationConfig [dict create value 0 raisedValue 1 base bin trace 1 bitWidth 1 label "" nameAssigned 0] ports [list \
+                    [dict create name out direction output width 1]]]]
         }
         logic {
             return [list \

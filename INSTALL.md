@@ -6,6 +6,19 @@ Users only need to run `RTL-Explorer-Setup.exe`. The installer is offline and in
 
 Keep the default `RTLExplorer` installation directory. Icarus Verilog for Windows cannot invoke its internal helper programs when its own installation path contains spaces.
 
+For a GitHub source checkout on 64-bit Windows, open PowerShell in the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-windows-dependencies.ps1
+.\run-windows.cmd
+```
+
+The script installs a private Tcl/Tk, OSS CAD Suite (Yosys, Python, Icarus,
+CXXRTL headers), sv2v and w64devkit C++ compiler under `.tools` and checks the
+toolchain. Internet access and several GB of free space are required. Downloads
+are cached; rerun the same command to resume after a failure. Use a checkout path
+without spaces for Icarus compatibility. No global PATH changes are needed.
+
 To build the installer on the development computer:
 
 ```powershell

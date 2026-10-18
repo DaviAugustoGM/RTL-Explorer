@@ -1,4 +1,5 @@
 namespace eval ::svvs::canvas_blocks {
+    variable movementLocked 0
     variable canvas ""
     variable blocks
     variable tagToBlock
@@ -39,7 +40,9 @@ proc ::svvs::canvas_blocks::create {parent} {
 
     bind $canvas <ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y %s}
     bind $canvas <B1-Motion> {::svvs::canvas_blocks::onDrag %x %y %s}
-    bind $canvas <ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y %s}
+    bind $canvas <ButtonRelease-1> {::svvs::simulation_components::releasePushButton; ::svvs::canvas_blocks::onRelease %x %y %s}
+    bind $canvas <FocusOut> {after idle ::svvs::simulation_components::checkPushButtonFocus}
+    bind . <FocusOut> {+after idle ::svvs::simulation_components::checkPushButtonFocus}
     bind $canvas <ButtonPress-3> {::svvs::canvas_connections::showSimplifiedSideMenu %X %Y %x %y}
     bind $canvas <Double-1> {::svvs::simulation_components::onDoubleClick %x %y}
     bind $canvas <MouseWheel> {::svvs::canvas_blocks::onWheel %D %x %y}
@@ -50,7 +53,7 @@ proc ::svvs::canvas_blocks::create {parent} {
     bind $canvas <ButtonRelease-2> {::svvs::canvas_blocks::panEnd}
     bind $canvas <Shift-ButtonPress-1> {focus %W; ::svvs::canvas_blocks::onPress %x %y %s; break}
     bind $canvas <Shift-B1-Motion> {::svvs::canvas_blocks::onDrag %x %y %s; break}
-    bind $canvas <Shift-ButtonRelease-1> {::svvs::canvas_blocks::onRelease %x %y %s; break}
+    bind $canvas <Shift-ButtonRelease-1> {::svvs::simulation_components::releasePushButton; ::svvs::canvas_blocks::onRelease %x %y %s; break}
     bind $canvas <Control-plus> {::svvs::canvas_blocks::keyboardZoom 1; break}
     bind $canvas <Control-equal> {::svvs::canvas_blocks::keyboardZoom 1; break}
     bind $canvas <Control-KP_Add> {::svvs::canvas_blocks::keyboardZoom 1; break}
@@ -86,6 +89,7 @@ proc ::svvs::canvas_blocks::loadSamples {modules} {
 }
 
 proc ::svvs::canvas_blocks::clearCanvas {} {
+    ::svvs::simulation_components::releasePushButton
     variable canvas
     variable blocks
     variable tagToBlock
@@ -156,9 +160,15 @@ proc ::svvs::canvas_blocks::exportDiagramData {} {
             }
         }
 
+        set savedModule [dict get $block module]
+        if {[::svvs::simulation_components::kind $savedModule] eq "push_button"} {
+            set bits [::svvs::simulation_components::config $savedModule bitWidth 1]
+            dict set savedModule simulationConfig value [expr {
+                [::svvs::simulation_components::config $savedModule raisedValue 1] ? 0 : ((1 << $bits) - 1)}]
+        }
         lappend nodes [dict create \
             id $id \
-            module [dict get $block module] \
+            module $savedModule \
             x $x \
             y $y \
             width $width \
@@ -229,6 +239,10 @@ proc ::svvs::canvas_blocks::drawBlock {module x y} {
     }
     set width [expr {$width * $zoom}]
     set height [expr {$height * $zoom}]
+    if {[::svvs::simulation_components::kind $module] eq "seven_segment"} {
+        set width [expr {[::svvs::theme::scale 88] * $zoom}]
+        set height [expr {[::svvs::theme::scale 124] * $zoom}]
+    }
     set id "block[incr ::svvs::state(blockSeq)]"
     return [::svvs::canvas_blocks::drawBlockWithId $id $module $x $y $width $height]
 }
@@ -503,7 +517,21 @@ proc ::svvs::canvas_blocks::nextInstanceModule {module} {
     return $module
 }
 
+proc ::svvs::canvas_blocks::toggleMovementLock {} {
+    variable movementLocked
+    variable dragTag
+    variable resizeTag
+    set movementLocked [expr {!$movementLocked}]
+    set dragTag ""
+    set resizeTag ""
+    ::svvs::layout::setToolbarActive "Lock blocks" $movementLocked
+    ::svvs::console::log [expr {$movementLocked ?
+        "Movimento e redimensionamento dos blocos bloqueados." :
+        "Movimento e redimensionamento dos blocos liberados."}]
+}
+
 proc ::svvs::canvas_blocks::onPress {x y {state 0}} {
+    if {$::svvs::simulation_components::pressedPush ne ""} { return }
     variable canvas
     variable selectedTag
     variable selectedTags
@@ -525,7 +553,7 @@ proc ::svvs::canvas_blocks::onPress {x y {state 0}} {
         set handleTag $hitTag
         set selectedTag $handleTag
         set selectedTags {}
-        set resizeTag $handleTag
+        set resizeTag [expr {$::svvs::canvas_blocks::movementLocked ? "" : $handleTag}]
         set dragLastX $x
         set dragLastY $y
         ::svvs::canvas_blocks::paintSelection
@@ -546,7 +574,7 @@ proc ::svvs::canvas_blocks::onPress {x y {state 0}} {
         if {[lsearch -exact $selectedTags $blockTag] < 0} {
             set selectedTags [list $blockTag]
         }
-        set dragTag $blockTag
+        set dragTag [expr {$::svvs::canvas_blocks::movementLocked ? "" : $blockTag}]
         set dragLastX $x
         set dragLastY $y
         set dragStartX $x
@@ -594,6 +622,7 @@ proc ::svvs::canvas_blocks::constrainedDragDelta {x y state} {
 }
 
 proc ::svvs::canvas_blocks::onDrag {x y {state 0}} {
+    if {$::svvs::simulation_components::pressedPush ne ""} { return }
     variable canvas
     variable dragTag
     variable resizeTag
@@ -768,6 +797,7 @@ proc ::svvs::canvas_blocks::blocksInBox {x1 y1 x2 y2} {
 }
 
 proc ::svvs::canvas_blocks::moveSelectedBlocks {fallbackTag dx dy} {
+    if {$::svvs::canvas_blocks::movementLocked} { return }
     variable canvas
     variable selectedTags
     set targets $selectedTags
@@ -794,6 +824,7 @@ proc ::svvs::canvas_blocks::moveBlockData {blockTag dx dy} {
 }
 
 proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
+    if {$::svvs::canvas_blocks::movementLocked} { return }
     variable blocks
     variable zoom
     set id [lindex [split $handleTag :] 1]
@@ -802,7 +833,7 @@ proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
     }
     set module [dict get $blocks($id) module]
     set kind [::svvs::simulation_components::kind $module]
-    if {$kind in {input probe clock}} {
+    if {$kind in {input probe clock led switch push_button seven_segment}} {
         set minWidth [expr {[::svvs::theme::scale 44] * $zoom}]
         set minHeight [expr {[::svvs::theme::scale 44] * $zoom}]
     } else {
@@ -811,6 +842,14 @@ proc ::svvs::canvas_blocks::resizeBlockBy {handleTag dx dy} {
     }
     set width [expr {max($minWidth, [dict get $blocks($id) width] + $dx)}]
     set height [expr {max($minHeight, [dict get $blocks($id) height] + $dy)}]
+    if {$kind eq "seven_segment"} {
+        set ratio [expr {[::svvs::theme::scale 88] / double([::svvs::theme::scale 124])}]
+        # Project the pointer movement onto the display's fixed aspect ratio.
+        set delta [expr {($dx * $ratio + $dy) / (1.0 + $ratio * $ratio)}]
+        set height [expr {max($minHeight, $minWidth / $ratio,
+            [dict get $blocks($id) height] + $delta)}]
+        set width [expr {$height * $ratio}]
+    }
     dict set blocks($id) width $width
     dict set blocks($id) height $height
     ::svvs::canvas_blocks::layoutBlock $id

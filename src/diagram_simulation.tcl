@@ -63,6 +63,12 @@ proc ::svvs::diagram_simulation::showDiagram {} {
 proc ::svvs::diagram_simulation::deactivate {} {
     variable active
     set active 0
+    foreach id [array names ::svvs::canvas_blocks::blocks] {
+        set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+        if {[::svvs::simulation_components::kind $module] in {led seven_segment}} {
+            ::svvs::simulation_components::updateDisplay $id
+        }
+    }
     set canvas $::svvs::canvas_blocks::canvas
     if {$canvas ne "" && [winfo exists $canvas]} {
         $canvas delete simulation-overlay

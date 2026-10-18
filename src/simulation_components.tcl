@@ -1,4 +1,5 @@
 namespace eval ::svvs::simulation_components {
+    variable pressedPush {}
     variable editBlock ""
     variable editValue 0
     variable editFrequency 1.0
@@ -14,6 +15,10 @@ proc ::svvs::simulation_components::kind {module} {
     switch -- [dict get $module name] {
         input_signal { return input }
         output_probe { return probe }
+        led { return led }
+        switch { return switch }
+        push_button { return push_button }
+        seven_segment_display { return seven_segment }
         clock_generator { return clock }
     }
     return ""
@@ -26,7 +31,7 @@ proc ::svvs::simulation_components::isVirtual {module} {
 proc ::svvs::simulation_components::isBuiltin {module} {
     if {[dict exists $module builtin] && [dict get $module builtin]} { return 1 }
     return [expr {[dict get $module name] in {
-        input_signal output_probe clock_generator reset_pulse constant
+        input_signal output_probe clock_generator led switch push_button seven_segment_display reset_pulse constant
         and_gate or_gate mux2 register counter
     }}]
 }
@@ -90,6 +95,8 @@ proc ::svvs::simulation_components::clockPortName {name width} {
 proc ::svvs::simulation_components::portConnectedToVirtualSource {portTag} {
     return [expr {
         [::svvs::simulation_components::portConnectedToKind $portTag input] ||
+        [::svvs::simulation_components::portConnectedToKind $portTag switch] ||
+        [::svvs::simulation_components::portConnectedToKind $portTag push_button] ||
         [::svvs::simulation_components::portConnectedToKind $portTag clock]
     }]
 }
@@ -261,14 +268,14 @@ proc ::svvs::simulation_components::adaptConnection {fromTag toTag} {
             return 0
         }
     }
-    if {$fromKind in {input probe} && $fromWidth != $toWidth} {
+    if {$fromKind in {input probe led switch push_button} && $fromWidth != $toWidth && $toKind ne "led"} {
         if {[::svvs::simulation_components::blockConnected $fromTag]} {
             ::svvs::console::log "O bloco de sinal ja esta ligado a uma rede de $fromWidth bits." warn
             return 0
         }
         ::svvs::simulation_components::setPortWidth $fromTag $toWidth
     }
-    if {$toKind in {input probe} && $toWidth != $fromWidth} {
+    if {$toKind in {input probe led switch push_button} && $toWidth != $fromWidth && $fromKind ne "led"} {
         if {[::svvs::simulation_components::blockConnected $toTag]} {
             ::svvs::console::log "O bloco de sinal ja esta ligado a uma rede de $toWidth bits." warn
             return 0
@@ -373,13 +380,26 @@ proc ::svvs::simulation_components::setPortWidth {portTag width} {
     set block $::svvs::canvas_blocks::blocks($id)
     set module [dict get $block module]
     set updated {}
+    if {[::svvs::simulation_components::kind $module] eq "seven_segment"} { return }
     foreach port [dict get $module ports] {
         if {[dict get $port name] eq $portName} { dict set port width $width }
         lappend updated $port
     }
     dict set module ports $updated
     dict set module simulationConfig bitWidth $width
+    if {[::svvs::simulation_components::kind $module] in {switch push_button}} {
+        dict set module simulationConfig value [expr {
+            [::svvs::simulation_components::config $module value 0] & ((1 << $width) - 1)}]
+        if {[::svvs::simulation_components::kind $module] eq "push_button"} {
+            dict set module simulationConfig value [expr {
+                [::svvs::simulation_components::config $module raisedValue 1] ? 0 : ((1 << $width) - 1)}]
+        }
+    }
     dict set block module $module
+    if {[::svvs::simulation_components::kind $module] in {led switch push_button}} {
+        dict set block width [expr {[::svvs::theme::scale [expr {max(64, 16 + 28 * $width)}]] *
+            $::svvs::canvas_blocks::zoom}]
+    }
     set ::svvs::canvas_blocks::blocks($id) $block
     foreach port $updated {
         if {[dict get $port name] eq $portName} {
@@ -399,7 +419,7 @@ proc ::svvs::simulation_components::decorateBlock {id} {
     set tag "block:$id"
     foreach item [$canvas find withtag $tag] {
         set tags [$canvas gettags $item]
-        if {[lsearch -exact $tags resize-handle] >= 0 && $kind in {input probe clock}} {
+        if {[lsearch -exact $tags resize-handle] >= 0 && $kind in {input probe clock led switch push_button seven_segment}} {
             $canvas dtag $item simulation-hidden
             $canvas itemconfigure $item -state normal
         } elseif {[lsearch -exact $tags block-header] >= 0 ||
@@ -411,9 +431,14 @@ proc ::svvs::simulation_components::decorateBlock {id} {
         }
     }
     if {[llength [$canvas find withtag "simulation-component:$id"]] == 0} {
+        if {$kind eq "led"} {
+            $canvas create oval 0 0 1 1 -fill #30343b -outline #808894 -width 2 \
+                -tags [list $tag "simulation-component:$id" simulation-component]
+        } else {
         $canvas create text 0 0 -text "0" -fill [::svvs::theme::color accentHover] \
             -font [::svvs::theme::font "Cascadia Mono" 12 bold] \
             -tags [list $tag "simulation-component:$id" simulation-component]
+        }
         set script [list ::svvs::simulation_components::activateBlock $id]
         append script "\nbreak"
         $canvas bind "simulation-component:$id" <Button-1> $script
@@ -438,10 +463,189 @@ proc ::svvs::simulation_components::layoutDecoration {id} {
     set width [dict get $block width]
     set height [dict get $block height]
     set zoom $::svvs::canvas_blocks::zoom
+    if {[::svvs::simulation_components::kind [dict get $block module]] eq "led"} {
+        set canvas $::svvs::canvas_blocks::canvas
+        set bits [::svvs::simulation_components::config [dict get $block module] bitWidth 1]
+        if {[llength [$canvas find withtag "simulation-component:$id"]] != $bits} {
+            $canvas delete "simulation-component:$id"
+            $canvas delete "led-bit-label:$id"
+            for {set bit 0} {$bit < $bits} {incr bit} {
+                $canvas create oval 0 0 1 1 -fill #30343b -outline #808894 -width 2 \
+                    -tags [list "block:$id" "simulation-component:$id" simulation-component "led-bit:$id:$bit"]
+                $canvas create text 0 0 -text $bit -fill [::svvs::theme::color muted] \
+                    -tags [list "block:$id" "led-bit-label:$id" "led-bit-index:$id:$bit"]
+            }
+        }
+        set gap [expr {$width / double($bits)}]
+        set radius [expr {min($gap * 0.35, $height * 0.27)}]
+        for {set bit 0} {$bit < $bits} {incr bit} {
+            set cx [expr {$x + ($bits - $bit - 0.5) * $gap}]
+            set cy [expr {$y + $height * 0.43}]
+            $canvas coords "led-bit:$id:$bit" \
+                [expr {$cx - $radius}] [expr {$cy - $radius}] \
+                [expr {$cx + $radius}] [expr {$cy + $radius}]
+            $canvas coords "led-bit-index:$id:$bit" $cx [expr {$y + $height * 0.85}]
+            $canvas itemconfigure "led-bit-index:$id:$bit" \
+                -font [list {Segoe UI} [::svvs::simulation_components::componentLabelFontSize]]
+        }
+    } elseif {[::svvs::simulation_components::kind [dict get $block module]] in {switch push_button}} {
+        ::svvs::simulation_components::layoutSwitch $id
+    } elseif {[::svvs::simulation_components::kind [dict get $block module]] eq "seven_segment"} {
+        ::svvs::simulation_components::layoutSevenSegment $id
+    } else {
     $::svvs::canvas_blocks::canvas coords "simulation-component:$id" \
         [expr {$x + $width / 2.0}] [expr {$y + $height / 2.0}]
+    }
     $::svvs::canvas_blocks::canvas coords "simulation-component-label:$id" \
         [expr {$x + $width / 2.0}] [expr {$y - ([::svvs::theme::scale 5] * $zoom)}]
+}
+
+proc ::svvs::simulation_components::layoutSevenSegment {id} {
+    set canvas $::svvs::canvas_blocks::canvas
+    set block $::svvs::canvas_blocks::blocks($id)
+    # Coordinates use a 100 x 140 face, with bit 0 = a through bit 6 = g.
+    set shapes {
+        {25 12 75 12 82 19 75 26 25 26 18 19}
+        {78 29 85 22 92 29 92 61 85 68 78 61}
+        {78 79 85 72 92 79 92 111 85 118 78 111}
+        {25 114 75 114 82 121 75 128 25 128 18 121}
+        {8 79 15 72 22 79 22 111 15 118 8 111}
+        {8 29 15 22 22 29 22 61 15 68 8 61}
+        {25 63 75 63 82 70 75 77 25 77 18 70}
+    }
+    if {[llength [$canvas find withtag "seven-segment:$id"]] != 7} {
+        $canvas delete "simulation-component:$id"
+        for {set bit 0} {$bit < 7} {incr bit} {
+            $canvas create polygon 0 0 1 0 1 1 -fill #ff3434 -outline #42191c -state hidden \
+                -tags [list "block:$id" "simulation-component:$id" simulation-component \
+                    "seven-segment:$id" "seven-segment:$id:$bit"]
+        }
+    }
+    set x [dict get $block x]
+    set y [dict get $block y]
+    set sx [expr {[dict get $block width] / 100.0}]
+    set sy [expr {[dict get $block height] / 140.0}]
+    set bit 0
+    foreach shape $shapes {
+        set coords {}
+        foreach {px py} $shape {
+            lappend coords [expr {$x + $px * $sx}] [expr {$y + $py * $sy}]
+        }
+        $canvas coords "seven-segment:$id:$bit" {*}$coords
+        incr bit
+    }
+}
+
+proc ::svvs::simulation_components::pressPushButton {id bit} {
+    variable pressedPush
+    if {$pressedPush eq [list $id $bit]} { return }
+    ::svvs::simulation_components::releasePushButton
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
+    set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+    set width [::svvs::simulation_components::config $module bitWidth 1]
+    if {$bit < 0 || $bit >= $width} { return }
+    focus $::svvs::canvas_blocks::canvas
+    set pressedPush [list $id $bit]
+    set value [::svvs::simulation_components::config $module value 0]
+    set mask [expr {1 << $bit}]
+    set active [::svvs::simulation_components::config $module raisedValue 1]
+    ::svvs::simulation_components::applyInputBlockValue $id \
+        [expr {$active ? ($value | $mask) : ($value & ~$mask)}]
+}
+
+proc ::svvs::simulation_components::checkPushButtonFocus {} {
+    if {[focus] eq ""} {
+        ::svvs::simulation_components::releasePushButton
+    }
+}
+
+proc ::svvs::simulation_components::releasePushButton {} {
+    variable pressedPush
+    if {$pressedPush eq ""} { return }
+    lassign $pressedPush id bit
+    set pressedPush {}
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
+    set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+    set width [::svvs::simulation_components::config $module bitWidth 1]
+    set active [::svvs::simulation_components::config $module raisedValue 1]
+    ::svvs::simulation_components::applyInputBlockValue $id \
+        [expr {$active ? 0 : ((1 << $width) - 1)}]
+}
+
+proc ::svvs::simulation_components::toggleSwitchBit {id bit} {
+    if {![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
+    set module [dict get $::svvs::canvas_blocks::blocks($id) module]
+    set width [::svvs::simulation_components::config $module bitWidth 1]
+    if {$bit < 0 || $bit >= $width} { return }
+    set value [::svvs::simulation_components::config $module value 0]
+    ::svvs::simulation_components::applyInputBlockValue $id \
+        [expr {($value ^ (1 << $bit)) & ((1 << $width) - 1)}]
+}
+
+proc ::svvs::simulation_components::layoutSwitch {id} {
+    set canvas $::svvs::canvas_blocks::canvas
+    if {$canvas eq "" || ![winfo exists $canvas]} { return }
+    set block $::svvs::canvas_blocks::blocks($id)
+    set module [dict get $block module]
+    set bits [::svvs::simulation_components::config $module bitWidth 1]
+    set value [::svvs::simulation_components::config $module value 0]
+    if {[llength [$canvas find withtag "switch-track:$id"]] != $bits} {
+        $canvas delete "simulation-component:$id"
+        $canvas delete "switch-decoration:$id"
+        for {set bit 0} {$bit < $bits} {incr bit} {
+            set control "switch-control:$id:$bit"
+            set tags [list "block:$id" "switch-decoration:$id" $control]
+            $canvas create rectangle 0 0 1 1 -fill #30343b -outline #808894 \
+                -tags [concat $tags [list "simulation-component:$id" simulation-component "switch-track:$id" "switch-track:$id:$bit"]]
+            $canvas create line 0 0 1 1 -fill #c6ced8 -width 3 \
+                -tags [concat $tags [list "switch-lever:$id:$bit"]]
+            $canvas create oval 0 0 1 1 -fill #a9b2bf -outline #dce3ed \
+                -tags [concat $tags [list "switch-knob:$id:$bit"]]
+            $canvas create text 0 0 -fill [::svvs::theme::color muted] \
+                -tags [concat $tags [list "switch-state:$id:$bit"]]
+            if {[::svvs::simulation_components::kind $module] eq "push_button"} {
+                $canvas bind $control <Button-1> "[list ::svvs::simulation_components::pressPushButton $id $bit]\nbreak"
+                $canvas bind $control <Double-1> "[list ::svvs::simulation_components::pressPushButton $id $bit]\nbreak"
+                $canvas bind $control <B1-Motion> {break}
+            } else {
+                $canvas bind $control <Button-1> "[list ::svvs::simulation_components::toggleSwitchBit $id $bit]\nbreak"
+                $canvas bind $control <Double-1> "[list ::svvs::simulation_components::toggleSwitchBit $id $bit]\nbreak"
+            }
+        }
+    }
+    set x [dict get $block x]
+    set y [dict get $block y]
+    set height [dict get $block height]
+    set gap [expr {[dict get $block width] / double($bits)}]
+    set radius [expr {min($gap * 0.22, $height * 0.12)}]
+    for {set bit 0} {$bit < $bits} {incr bit} {
+        set on [expr {($value >> $bit) & 1}]
+        set cx [expr {$x + ($bits - $bit - 0.5) * $gap}]
+        set pivot [expr {$y + $height * 0.45}]
+        set raised [expr {$on == [::svvs::simulation_components::config $module raisedValue 1]}]
+        set tip [expr {$y + $height * ($raised ? 0.22 : 0.65)}]
+        $canvas coords "switch-track:$id:$bit" \
+            [expr {$cx - $radius}] [expr {$y + $height * 0.15}] \
+            [expr {$cx + $radius}] [expr {$y + $height * 0.72}]
+        $canvas coords "switch-lever:$id:$bit" $cx $pivot $cx $tip
+        $canvas coords "switch-knob:$id:$bit" \
+            [expr {$cx - $radius}] [expr {$tip - $radius}] \
+            [expr {$cx + $radius}] [expr {$tip + $radius}]
+        $canvas itemconfigure "switch-knob:$id:$bit" -fill [expr {$on ? "#35df65" : "#a9b2bf"}]
+        if {[::svvs::simulation_components::kind $module] eq "push_button"} {
+            set cy [expr {$y + $height * ($raised ? 0.49 : 0.42)}]
+            set buttonRadius [expr {min($gap * 0.35, $height * 0.28)}]
+            $canvas itemconfigure "switch-lever:$id:$bit" -state hidden
+            $canvas itemconfigure "switch-track:$id:$bit" -state hidden
+            $canvas coords "switch-knob:$id:$bit" \
+                [expr {$cx - $buttonRadius}] [expr {$cy - $buttonRadius}] \
+                [expr {$cx + $buttonRadius}] [expr {$cy + $buttonRadius}]
+            $canvas itemconfigure "switch-knob:$id:$bit" -width [expr {$raised ? 1 : 3}]
+        }
+        $canvas coords "switch-state:$id:$bit" $cx [expr {$y + $height * 0.88}]
+        $canvas itemconfigure "switch-state:$id:$bit" -text [expr {$bits == 1 ? "$on" : "$bit:$on"}] \
+            -font [list {Segoe UI} [::svvs::simulation_components::componentLabelFontSize]]
+    }
 }
 
 proc ::svvs::simulation_components::updateNameDisplay {id} {
@@ -496,6 +700,50 @@ proc ::svvs::simulation_components::updateDisplay {id {liveValue ""}} {
     set module [dict get $::svvs::canvas_blocks::blocks($id) module]
     set kind [::svvs::simulation_components::kind $module]
     if {$kind eq ""} { return }
+    if {$kind eq "seven_segment"} {
+        set canvas $::svvs::canvas_blocks::canvas
+        if {$liveValue eq "" && $::svvs::diagram_simulation::active &&
+            [info exists ::svvs::diagram_simulation::portSignals(port:$id:segments)]} {
+            set liveValue [::svvs::diagram_simulation::signalValue \
+                $::svvs::diagram_simulation::portSignals(port:$id:segments)]
+        }
+        if {$canvas ne "" && [winfo exists $canvas]} {
+            set activeLevel [::svvs::simulation_components::config $module activeLevel 1]
+            for {set bit 0} {$bit < 7} {incr bit} {
+                set value [::svvs::simulation_components::ledBitValue $liveValue $bit]
+                set on [expr {$value in {0 1} && $value == $activeLevel}]
+                $canvas itemconfigure "seven-segment:$id:$bit" \
+                    -fill #ff3434 -state [expr {$on ? "normal" : "hidden"}]
+            }
+        }
+        return
+    }
+    if {$kind in {switch push_button}} {
+        ::svvs::simulation_components::layoutSwitch $id
+        return
+    }
+    if {$kind eq "led"} {
+        set canvas $::svvs::canvas_blocks::canvas
+        if {$liveValue eq "" && $::svvs::diagram_simulation::active &&
+            [info exists ::svvs::diagram_simulation::portSignals(port:$id:in)]} {
+            set liveValue [::svvs::diagram_simulation::signalValue \
+                $::svvs::diagram_simulation::portSignals(port:$id:in)]
+        }
+        if {$canvas ne "" && [winfo exists $canvas]} {
+            set bits [::svvs::simulation_components::config $module bitWidth 1]
+            set colors [dict create blue #2196ff red #ff3434 green #35df65 yellow #ffdc32 white #ffffff]
+            set onColor [dict get $colors [::svvs::simulation_components::config $module ledColor red]]
+            for {set bit 0} {$bit < $bits} {incr bit} {
+                set value [::svvs::simulation_components::ledBitValue $liveValue $bit]
+                set color #30343b
+                if {$value in {0 1} && $value == [::svvs::simulation_components::config $module activeLevel 1]} {
+                    set color $onColor
+                }
+                $canvas itemconfigure "led-bit:$id:$bit" -fill $color
+            }
+        }
+        return
+    }
     set width [::svvs::simulation_components::config $module bitWidth 1]
     set base [::svvs::simulation_components::config $module base bin]
     if {$liveValue eq ""} {
@@ -520,6 +768,16 @@ proc ::svvs::simulation_components::updateDisplay {id {liveValue ""}} {
         $canvas itemconfigure "simulation-component:$id" -text $visible \
             -font [list {Cascadia Mono} $fontSize bold]
     }
+}
+
+proc ::svvs::simulation_components::ledBitValue {value bit} {
+    if {[regexp -nocase {^0b([01xz]+)$} $value -> digits]} {
+        set index [expr {[string length $digits] - 1 - $bit}]
+        if {$index < 0} { return 0 }
+        return [string tolower [string index $digits $index]]
+    }
+    if {![string is entier -strict $value]} { return x }
+    return [expr {($value >> $bit) & 1}]
 }
 
 proc ::svvs::simulation_components::refreshAllDisplays {} {
@@ -556,6 +814,47 @@ proc ::svvs::simulation_components::showMenu {id rootX rootY {post 1}} {
     .signalBlockMenu add command -label "Rename..." \
         -command [list ::svvs::simulation_components::renameDialog $id]
     .signalBlockMenu add separator
+    if {$kind eq "seven_segment"} {
+        set ::svvs::simulation_components::menuDisplayLevel \
+            [::svvs::simulation_components::config $module activeLevel 1]
+        menu .signalBlockMenu.displayLevel -tearoff 0
+        foreach level {1 0} {
+            .signalBlockMenu.displayLevel add radiobutton -label "Ativar com $level" \
+                -variable ::svvs::simulation_components::menuDisplayLevel -value $level \
+                -command [list ::svvs::simulation_components::setConfig $id activeLevel $level]
+        }
+        .signalBlockMenu add cascade -label "Ativar segmentos com" -menu .signalBlockMenu.displayLevel
+    }
+    if {$kind eq "led"} {
+        set ::svvs::simulation_components::menuLedLevel [::svvs::simulation_components::config $module activeLevel 1]
+        set ::svvs::simulation_components::menuLedColor [::svvs::simulation_components::config $module ledColor red]
+        menu .signalBlockMenu.ledLevel -tearoff 0
+        foreach level {1 0} {
+            .signalBlockMenu.ledLevel add radiobutton -label "Acender com $level" \
+                -variable ::svvs::simulation_components::menuLedLevel -value $level \
+                -command [list ::svvs::simulation_components::setConfig $id activeLevel $level]
+        }
+        .signalBlockMenu add cascade -label "Acender com" -menu .signalBlockMenu.ledLevel
+        menu .signalBlockMenu.ledColor -tearoff 0
+        foreach {label color} {Azul blue Vermelho red Verde green Amarelo yellow Branco white} {
+            .signalBlockMenu.ledColor add radiobutton -label $label \
+                -variable ::svvs::simulation_components::menuLedColor -value $color \
+                -command [list ::svvs::simulation_components::setConfig $id ledColor $color]
+        }
+        .signalBlockMenu add cascade -label "Cor do LED" -menu .signalBlockMenu.ledColor
+    }
+    if {$kind in {switch push_button}} {
+        set ::svvs::simulation_components::menuSwitchRaisedValue \
+            [::svvs::simulation_components::config $module raisedValue 1]
+        menu .signalBlockMenu.switchRaisedValue -tearoff 0
+        foreach level {1 0} {
+            .signalBlockMenu.switchRaisedValue add radiobutton \
+                -label [expr {$kind eq "push_button" ? "Enviar $level ao pressionar" : "Enviar $level ao levantar"}] \
+                -variable ::svvs::simulation_components::menuSwitchRaisedValue -value $level \
+                -command [list ::svvs::simulation_components::setSwitchRaisedValue $id $level]
+        }
+        .signalBlockMenu add cascade -label [expr {$kind eq "push_button" ? "Valor ao pressionar" : "Valor ao levantar"}] -menu .signalBlockMenu.switchRaisedValue
+    }
     if {$kind eq "input"} {
         .signalBlockMenu add command -label "Set value..." \
             -command [list ::svvs::simulation_components::editValueDialog $id]
@@ -591,7 +890,7 @@ proc ::svvs::simulation_components::showMenu {id rootX rootY {post 1}} {
                 -command [list ::svvs::simulation_components::setFrequency $id $frequency]
         }
         .signalBlockMenu add cascade -label "Frequency" -menu .signalBlockMenu.frequency
-    } else {
+    } elseif {$kind ni {led switch push_button seven_segment}} {
         menu .signalBlockMenu.base -tearoff 0
         foreach {label base} {Binary bin Decimal dec Hexadecimal hex} {
             .signalBlockMenu.base add command -label $label \
@@ -604,6 +903,22 @@ proc ::svvs::simulation_components::showMenu {id rootX rootY {post 1}} {
     .signalBlockMenu add command -label [expr {$trace ? "Hide waveform" : "Show waveform"}] \
         -command [list ::svvs::simulation_components::toggleTrace $id]
     if {$post} { tk_popup .signalBlockMenu $rootX $rootY }
+}
+
+proc ::svvs::simulation_components::setSwitchRaisedValue {id level} {
+    if {$level ni {0 1} || ![info exists ::svvs::canvas_blocks::blocks($id)]} { return }
+    set block $::svvs::canvas_blocks::blocks($id)
+    set module [dict get $block module]
+    if {[::svvs::simulation_components::kind $module] ni {switch push_button}} { return }
+    set oldLevel [::svvs::simulation_components::config $module raisedValue 1]
+    if {$level == $oldLevel} { return }
+    set width [::svvs::simulation_components::config $module bitWidth 1]
+    set value [::svvs::simulation_components::config $module value 0]
+    dict set block module simulationConfig raisedValue $level
+    set ::svvs::canvas_blocks::blocks($id) $block
+    # Preserve every lever position while reversing the electrical output.
+    ::svvs::simulation_components::applyInputBlockValue $id \
+        [expr {$value ^ ((1 << $width) - 1)}]
 }
 
 proc ::svvs::simulation_components::setConfig {id key value} {
@@ -1019,6 +1334,10 @@ proc ::svvs::simulation_components::activateBlock {id} {
     set kind [::svvs::simulation_components::kind $module]
     if {$kind eq "clock"} {
         ::svvs::simulation_components::frequencyDialog $id
+        return
+    }
+    if {$kind eq "switch"} {
+        ::svvs::simulation_components::toggleSwitchBit $id 0
         return
     }
     if {$kind ne "input"} { return }

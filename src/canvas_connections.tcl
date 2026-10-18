@@ -785,7 +785,7 @@ proc ::svvs::canvas_connections::rebuildSimplified {} {
     variable selectedSimplePair
     set canvas $::svvs::canvas_blocks::canvas
     $canvas delete simplified-connection
-    if {!$simplifiedMode} {
+    if {!$simplifiedMode || !$::svvs::canvas_connections::wiresVisible} {
         return
     }
 
@@ -1185,7 +1185,7 @@ proc ::svvs::canvas_connections::rebuildMarkers {} {
         return
     }
     $canvas delete wire-marker
-    if {$simplifiedMode} {
+    if {$simplifiedMode || !$::svvs::canvas_connections::wiresVisible} {
         return
     }
 
@@ -1760,10 +1760,10 @@ proc ::svvs::canvas_connections::fullPortWidthForConnection {conn} {
     set fromWidth [::svvs::canvas_connections::portWidth $fromTag]
     set toWidth [::svvs::canvas_connections::portWidth $toTag]
 
-    if {$fromKind in {input probe} && $toKind ni {input probe clock}} {
+    if {$fromKind in {input probe led switch push_button} && $toKind ni {input probe clock led switch push_button}} {
         return $toWidth
     }
-    if {$toKind in {input probe} && $fromKind ni {input probe clock}} {
+    if {$toKind in {input probe led switch push_button} && $fromKind ni {input probe clock led switch push_button}} {
         return $fromWidth
     }
     return [expr {max($fromWidth, $toWidth)}]
@@ -1784,7 +1784,7 @@ proc ::svvs::canvas_connections::syncVirtualEndpointWidth {conn width} {
     foreach endpoint {from to} {
         set portTag [dict get $conn $endpoint]
         set kind [::svvs::canvas_connections::portKind $portTag]
-        if {$kind ni {input probe}} {
+        if {$kind ni {input probe led switch push_button}} {
             continue
         }
         if {[::svvs::canvas_connections::portWidth $portTag] != $width} {
@@ -1836,6 +1836,10 @@ proc ::svvs::canvas_connections::effectiveConnectionWidth {conn} {
 }
 
 proc ::svvs::canvas_connections::paintSelection {{selected ""}} {
+    if {!$::svvs::canvas_connections::wiresVisible} {
+        ::svvs::canvas_connections::refreshDisplay
+        return
+    }
     variable connections
     variable simplifiedMode
     variable selectedSimplePair
