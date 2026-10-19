@@ -236,6 +236,7 @@ proc ::svvs::canvas_blocks::exportDiagramData {} {
     return [dict create \
         zoom $zoom \
         showPortNames $showPortNames \
+        wiresVisible $::svvs::canvas_connections::wiresVisible \
         simplifiedConnections $::svvs::canvas_connections::simplifiedMode \
         simplifiedRoutes [::svvs::canvas_connections::exportSimplifiedRoutes] \
         nodes $nodes]
@@ -244,6 +245,12 @@ proc ::svvs::canvas_blocks::exportDiagramData {} {
 proc ::svvs::canvas_blocks::importDiagramData {data} {
     variable zoom
     variable showPortNames
+
+    set ::svvs::canvas_connections::wiresVisible 1
+    if {[dict exists $data wiresVisible]} {
+        set ::svvs::canvas_connections::wiresVisible [dict get $data wiresVisible]
+    }
+    ::svvs::layout::setToolbarActive "Wires" $::svvs::canvas_connections::wiresVisible
 
     if {[dict exists $data zoom]} {
         set zoom [dict get $data zoom]
