@@ -5,6 +5,7 @@ namespace eval ::svvs::canvas_blocks {
     variable tagToBlock
     variable tagToPort
     variable selectedTag ""
+    variable copiedNodes {}
     variable selectedTags
     variable dragTag ""
     variable resizeTag ""
@@ -64,10 +65,67 @@ proc ::svvs::canvas_blocks::create {parent} {
     bind $canvas <Right> {::svvs::canvas_blocks::keyboardPan 40 0; break}
     bind $canvas <Up> {::svvs::canvas_blocks::keyboardPan 0 -40; break}
     bind $canvas <Down> {::svvs::canvas_blocks::keyboardPan 0 40; break}
+    bind $canvas <<Copy>> {::svvs::canvas_blocks::copySelected; break}
+    bind $canvas <<Paste>> {::svvs::canvas_blocks::pasteCopied; break}
+    bind $canvas <Control-c> {::svvs::canvas_blocks::copySelected; break}
+    bind $canvas <Control-v> {::svvs::canvas_blocks::pasteCopied; break}
 
     after idle ::svvs::canvas_blocks::centerViewport
 
     return $canvas
+}
+
+proc ::svvs::canvas_blocks::copySelected {} {
+    variable selectedTags
+    variable copiedNodes
+    variable zoom
+
+    set ids {}
+    foreach tag $selectedTags {
+        set id [blockIdFromTag $tag]
+        if {[info exists ::svvs::canvas_blocks::blocks($id)]} {
+            lappend ids $id
+        }
+    }
+    if {![llength $ids]} {
+        set id [selectedBlockId]
+        if {$id ne ""} { lappend ids $id }
+    }
+    if {![llength $ids]} { return }
+
+    set copiedNodes {}
+    foreach node [dict get [exportDiagramData] nodes] {
+        if {[dict get $node id] ni $ids} { continue }
+        # Store logical dimensions so changing zoom does not resize the copy.
+        foreach key {x y width height} {
+            dict set node $key [expr {[dict get $node $key] / $zoom}]
+        }
+        lappend copiedNodes $node
+    }
+}
+
+proc ::svvs::canvas_blocks::pasteCopied {} {
+    variable copiedNodes
+    variable selectedTags
+    variable selectedTag
+    variable zoom
+
+    if {![llength $copiedNodes]} { return }
+    set created {}
+    foreach node $copiedNodes {
+        set module [nextInstanceModule [dict get $node module]]
+        set id "block[incr ::svvs::state(blockSeq)]"
+        drawBlockWithId $id $module \
+            [expr {[dict get $node x] * $zoom}] \
+            [expr {[dict get $node y] * $zoom}] \
+            [expr {[dict get $node width] * $zoom}] \
+            [expr {[dict get $node height] * $zoom}]
+        lappend created "block:$id"
+    }
+    set selectedTags $created
+    set selectedTag [lindex $created 0]
+    paintSelection
+    showSelectionProperties
 }
 
 proc ::svvs::canvas_blocks::loadSamples {modules} {
@@ -544,7 +602,7 @@ proc ::svvs::canvas_blocks::onPress {x y {state 0}} {
     variable dragAppliedDX
     variable dragAppliedDY
 
-    focus .
+    focus $::svvs::canvas_blocks::canvas
     set hit [::svvs::canvas_blocks::hitAt $x $y]
     set hitKind [expr {$hit eq "" ? "" : [dict get $hit kind]}]
     set hitTag [expr {$hit eq "" ? "" : [dict get $hit tag]}]
