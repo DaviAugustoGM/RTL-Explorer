@@ -357,14 +357,14 @@ proc ::svvs::simulation_components::componentFontInfo {id text} {
     set target [expr {int(round([::svvs::theme::scale 12] * $zoom))}]
     set heightLimit [expr {int(max($minSize, $height * 0.48))}]
     set fontSize [expr {min($maxSize, max($minSize, min($target, $heightLimit)))}]
-    set maxChars [expr {int($available / max(1.0, $fontSize * 0.62))}]
-    set clipped [::svvs::simulation_components::clipDisplayText $text $maxChars]
-
-    set length [string length $clipped]
+    # Fit the complete value before abbreviating it, including wide buses.
+    set length [string length $text]
     if {$length > 0} {
         set fitSize [expr {int($available / max(1.0, $length * 0.62))}]
         set fontSize [expr {min($fontSize, max($minSize, $fitSize))}]
     }
+    set maxChars [expr {int($available / max(1.0, $fontSize * 0.62))}]
+    set clipped [::svvs::simulation_components::clipDisplayText $text $maxChars]
     return [list $clipped $fontSize]
 }
 
@@ -661,21 +661,21 @@ proc ::svvs::simulation_components::updateNameDisplay {id} {
 }
 
 proc ::svvs::simulation_components::formatValue {value width base} {
-    if {![string is integer -strict $value]} { return [string toupper $value] }
+    if {![string is entier -strict $value]} { return [string toupper $value] }
     set maxValue [expr {(1 << $width) - 1}]
     set value [expr {$value & $maxValue}]
     switch -- $base {
-        bin { return "0b[format %0${width}b $value]" }
+        bin { return "0b[format %0${width}llb $value]" }
         hex {
             set digits [expr {int(ceil($width / 4.0))}]
-            return "0x[format %0${digits}X $value]"
+            return "0x[format %0${digits}llX $value]"
         }
         default { return $value }
     }
 }
 
 proc ::svvs::simulation_components::formatMappedValue {value width base {valueMap {}}} {
-    if {[string is integer -strict $value]} {
+    if {[string is entier -strict $value]} {
         set key [expr {$value & ((1 << $width) - 1)}]
         if {[dict exists $valueMap $key] && [dict get $valueMap $key] ne ""} {
             return [dict get $valueMap $key]
@@ -1496,11 +1496,11 @@ proc ::svvs::simulation_components::parseValue {text base} {
         hex {
             regsub -nocase {^0x} $text "" text
             if {![regexp -nocase {^[0-9a-f]+$} $text]} { return [list 0 0] }
-            scan $text %x value
+            set value [expr "0x$text"]
             return [list 1 $value]
         }
         default {
-            if {![string is integer -strict $text]} { return [list 0 0] }
+            if {![string is entier -strict $text]} { return [list 0 0] }
             return [list 1 $text]
         }
     }

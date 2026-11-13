@@ -17,6 +17,28 @@ if {[::svvs::simulation_components::parseValue 0b1010 bin] ne {1 10}} { error "b
 if {[::svvs::simulation_components::parseValue 0x2A hex] ne {1 42}} { error "hex input parsing failed" }
 if {[::svvs::simulation_components::formatValue 10 8 bin] ne {0b00001010}} { error "binary formatting failed" }
 if {[::svvs::simulation_components::formatValue 10 8 hex] ne {0x0A}} { error "hex formatting failed" }
+# Tcl's integer/scan/format defaults truncate or reject wide bus values.
+foreach width {32 64 65 127 128 129 256} {
+    set value [expr {(1 << $width) - 1}]
+    set binary "0b[string repeat 1 $width]"
+    set hex "0x[string toupper [format %llx $value]]"
+    foreach base {bin hex dec} expected [list $binary $hex $value] {
+        if {[::svvs::simulation_components::formatValue $value $width $base] ne $expected} {
+            error "$width-bit $base formatting truncated the value"
+        }
+        set parsed [::svvs::simulation_components::parseValue $expected $base]
+        if {![lindex $parsed 0] || [lindex $parsed 1] != $value} {
+            error "$width-bit $base parsing truncated the value"
+        }
+    }
+    if {[::svvs::simulation_components::formatMappedValue $value $width hex \
+            [dict create $value WIDE]] ne "WIDE"} {
+        error "$width-bit mapped probe value was lost"
+    }
+}
+if {[::svvs::simulation_components::formatValue x 128 hex] ne "X"} {
+    error "unknown wide values must stay unknown"
+}
 foreach {literal expected} {0b10 2 0x2 2 2 2} {
     set parsed [::svvs::simulation_components::parseMappedValue $literal]
     if {![lindex $parsed 0] || [lindex $parsed 1] != $expected} {

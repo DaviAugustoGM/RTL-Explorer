@@ -554,7 +554,7 @@ proc ::svvs::simulator_view::applyInput {name} {
     variable signalWidths
     if {![info exists signalVars($name)]} { return }
     set value [string trim $signalVars($name)]
-    if {![string is integer -strict $value] || $value < 0 || $value >= (1 << $signalWidths($name))} {
+    if {![string is entier -strict $value] || $value < 0 || $value >= (1 << $signalWidths($name))} {
         ::svvs::console::log "Valor invalido para $name ([set signalWidths($name)] bits)." warn
         return
     }
@@ -938,8 +938,8 @@ proc ::svvs::simulator_view::drawMappedWaveLabels {samples x0 x1 y startTime end
     set count [llength $samples]
     for {set index 0} {$index < $count} {incr index} {
         lassign [lindex $samples $index] timestamp value
-        if {![string is integer -strict $value]} { continue }
-        set key [expr {int($value)}]
+        if {![string is entier -strict $value]} { continue }
+        set key [expr {$value + 0}]
         if {![dict exists $valueMap $key]} { continue }
         set nextTime $endTime
         if {$index + 1 < $count} {

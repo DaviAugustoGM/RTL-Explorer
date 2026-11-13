@@ -73,16 +73,11 @@ proc ::svvs::simulation_backends::removeStaleFiles {directory pattern keep} {
 
 proc ::svvs::simulation_backends::writeCxxrtlBridge {path model {clocks {}}} {
     set allSignals [concat [dict get $model inputs] [dict get $model outputs]]
-    foreach signal $allSignals {
-        if {[dict get $signal width] > 64} {
-            error "CXXRTL live bridge supports ports up to 64 bits; '[dict get $signal name]' is wider."
-        }
-    }
     set emitLines ""
     foreach signal $allSignals {
         set name [dict get $signal name]
         set field [::svvs::simulation_backends::cxxrtlIdentifier $name]
-        append emitLines "    std::cout << \"\\t[::svvs::simulation_backends::cppString $name]=\" << top->$field.template get<unsigned long long>();\n"
+        append emitLines "    std::cout << \"\\t[::svvs::simulation_backends::cppString $name]=\" << port_value(top->$field);\n"
     }
     set readyLines ""
     set inputNames {}
@@ -98,7 +93,7 @@ proc ::svvs::simulation_backends::writeCxxrtlBridge {path model {clocks {}}} {
         set name [dict get $signal name]
         set field [::svvs::simulation_backends::cxxrtlIdentifier $name]
         set keyword [expr {$first ? "if" : "else if"}]
-        append setLines "                $keyword (part\[1\] == \"[::svvs::simulation_backends::cppString $name]\") { top->$field.set(value); found = true; }\n"
+        append setLines "                $keyword (part\[1\] == \"[::svvs::simulation_backends::cppString $name]\") { set_port(top->$field, part\[2\]); found = true; }\n"
         set first 0
     }
     set clockLines ""
@@ -163,17 +158,75 @@ static std::string find_debug_item(const std::string &module, const std::string 
     if (selected.empty()) throw std::runtime_error("internal signal not found: " + module + "." + signal);
     return selected;
 }
-static unsigned long long debug_value(const std::string &name) {
-    unsigned long long value = 0;
+// Keep decimal VALUES compatible with all backends without a machine-word limit.
+static std::string decimal_value(const std::vector<bool> &bits) {
+    std::string digits = "0";
+    for (size_t bit = bits.size(); bit-- > 0;) {
+        unsigned carry = bits[bit];
+        for (auto it = digits.rbegin(); it != digits.rend(); ++it) {
+            unsigned digit = (*it - '0') * 2 + carry;
+            *it = '0' + digit % 10;
+            carry = digit / 10;
+        }
+        if (carry) digits.insert(digits.begin(), '0' + carry);
+    }
+    return digits;
+}
+template<size_t Bits>
+static std::string port_value(const cxxrtl::value<Bits> &port) {
+    std::vector<bool> bits(Bits);
+    const size_t chunk_bits = sizeof(cxxrtl::chunk_t) * 8;
+    for (size_t bit = 0; bit < Bits; ++bit)
+        bits[bit] = (port.data[bit / chunk_bits] >> (bit % chunk_bits)) & 1;
+    return decimal_value(bits);
+}
+template<size_t Bits>
+static std::string port_value(const cxxrtl::wire<Bits> &port) {
+    return port_value(port.curr);
+}
+template<size_t Bits>
+static void set_port(cxxrtl::value<Bits> &port, const std::string &text) {
+    unsigned base = 10;
+    size_t start = !text.empty() && text[0] == '+' ? 1 : 0;
+    if (text.size() > start + 1 && text[start] == '0') {
+        const char prefix = text[start + 1];
+        if (prefix == 'x' || prefix == 'X') { base = 16; start += 2; }
+        else if (prefix == 'b' || prefix == 'B') { base = 2; start += 2; }
+        else if (prefix == 'o' || prefix == 'O') { base = 8; start += 2; }
+        else { base = 8; ++start; }
+    }
+    if (start == text.size()) throw std::runtime_error("empty input value");
+    std::vector<bool> bits(Bits);
+    for (size_t index = start; index < text.size(); ++index) {
+        const char ch = text[index];
+        unsigned carry = ch >= '0' && ch <= '9' ? ch - '0' :
+            ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 :
+            ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : base;
+        if (carry >= base) throw std::runtime_error("invalid input value: " + text);
+        for (size_t bit = 0; bit < Bits; ++bit) {
+            unsigned next = unsigned(bits[bit]) * base + carry;
+            bits[bit] = next & 1;
+            carry = next >> 1;
+        }
+        if (carry) throw std::runtime_error("input value exceeds port width");
+    }
+    cxxrtl::value<Bits> parsed;
+    for (size_t bit = 0; bit < Bits; ++bit) parsed.set_bit(bit, bits[bit]);
+    port = parsed;
+}
+template<size_t Bits>
+static void set_port(cxxrtl::wire<Bits> &port, const std::string &text) {
+    set_port(port.next, text);
+}
+static std::string debug_value(const std::string &name) {
+    std::vector<bool> bits;
     const size_t chunk_bits = sizeof(cxxrtl::chunk_t) * 8;
     for (const auto &item : debug.at(name)) {
-        if (item.width + item.lsb_at > 64) throw std::runtime_error("internal watch wider than 64 bits");
-        for (size_t bit = 0; bit < item.width; ++bit) {
-            if ((item.curr[bit / chunk_bits] >> (bit % chunk_bits)) & 1)
-                value |= 1ull << (bit + item.lsb_at);
-        }
+        if (bits.size() < item.width + item.lsb_at) bits.resize(item.width + item.lsb_at);
+        for (size_t bit = 0; bit < item.width; ++bit)
+            bits[bit + item.lsb_at] = (item.curr[bit / chunk_bits] >> (bit % chunk_bits)) & 1;
     }
-    return value;
+    return decimal_value(bits);
 }
 static void emit_values() {
     std::cout << "VALUES";
@@ -198,7 +251,6 @@ int main() {
                 settle();
                 rebuild_debug();
             } else if (part[0] == "SET" && part.size() == 3) {
-                const auto value = std::stoull(part[2], nullptr, 0);
                 bool found = false;
 @SET@                if (!found) throw std::runtime_error("unknown input: " + part[1]);
                 settle();

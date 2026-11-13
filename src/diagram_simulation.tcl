@@ -107,11 +107,11 @@ proc ::svvs::diagram_simulation::signalValue {name} {
 
 proc ::svvs::diagram_simulation::integerValue {value} {
     set value [string trim $value]
-    if {[string is integer -strict $value]} {
+    if {[string is entier -strict $value]} {
         return $value
     }
     if {[regexp -nocase {^0x([0-9a-f]+)$} $value -> hex]} {
-        scan $hex %x parsed
+        set parsed [expr "0x$hex"]
         return $parsed
     }
     if {[regexp -nocase {^0b([01]+)$} $value -> bits]} {
@@ -301,7 +301,7 @@ proc ::svvs::diagram_simulation::editInput {name width} {
         return
     }
     set editSignal $name
-    set editValue [expr {[string is integer -strict $current] ? $current : 0}]
+    set editValue [expr {[string is entier -strict $current] ? $current : 0}]
     catch {destroy .simulationInput}
     toplevel .simulationInput
     wm title .simulationInput "Set input"
